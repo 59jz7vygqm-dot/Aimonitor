@@ -628,6 +628,47 @@ async def _rule_no_llm_data(conn) -> list[Finding]:
     ]
 
 
+async def _rule_shared_token(conn) -> list[Finding]:
+    """Ein Token, das mehrere Maschinen benutzen.
+
+    Technisch funktioniert das, aber es macht den Sinn getrennter Tokens
+    zunichte: ein Token zu widerrufen legt dann alle betroffenen Maschinen
+    still. In der Praxis ist es fast immer ein Versehen beim Kopieren - und
+    es fällt sonst nie auf, weil nichts kaputtgeht.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT token_name, array_agg(name ORDER BY name) AS nodes
+        FROM nodes
+        WHERE token_name IS NOT NULL
+          AND last_seen > now() - INTERVAL '1 day'
+        GROUP BY token_name HAVING count(*) > 1
+        """
+    )
+    return [
+        Finding(
+            "token.shared", "warning", "global", r["token_name"],
+            f"Token „{r['token_name']}“ wird von {len(r['nodes'])} Maschinen benutzt",
+            {
+                "token": r["token_name"],
+                "maschinen": list(r["nodes"]),
+                "bedeutung": "Ein Token zu widerrufen legt alle diese Maschinen "
+                             "gleichzeitig still. Meist wurde beim Einrichten "
+                             "dasselbe Token kopiert.",
+                "zu_tun": [
+                    "Je Maschine ein eigenes Token anlegen: "
+                    "make token NAME=agent-<maschine>",
+                    "Danach install.sh auf der Maschine mit dem neuen Token "
+                    "erneut ausführen – die übrige Konfiguration bleibt erhalten.",
+                    "Das alte Token anschließend widerrufen: "
+                    "DELETE /api/v1/tokens/<id>",
+                ],
+            },
+        )
+        for r in rows
+    ]
+
+
 RULES = (
     _rule_nodes_stale,
     _rule_gpu,
@@ -638,6 +679,7 @@ RULES = (
     _rule_privacy,
     _rule_comfy,
     _rule_no_llm_data,
+    _rule_shared_token,
 )
 
 

@@ -63,7 +63,40 @@ info "Binary nach $BIN_DIR/aimon-agent installiert."
 # ------------------------------------------------------------- Konfiguration
 mkdir -p "$CONF_DIR"
 if [ -f "$CONF_DIR/agent.yaml" ]; then
-    info "Bestehende $CONF_DIR/agent.yaml bleibt unverändert."
+    # Eine bestehende Konfiguration nicht überschreiben - aber Token und
+    # Server-Adresse nachziehen. Sonst wird ein frisch übergebenes Token
+    # stillschweigend verworfen und die Maschine läuft weiter mit dem alten:
+    # man glaubt, rotiert zu haben, und hat es nicht.
+    CHANGED=""
+    # Wert hinter dem Doppelpunkt holen, Anführungszeichen und Leerraum weg.
+    yaml_value() {
+        sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" "$CONF_DIR/agent.yaml" \
+            | head -1 \
+            | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//' -e 's/[[:space:]]*$//'
+    }
+    OLD_TOKEN="$(yaml_value token)"
+    OLD_URL="$(yaml_value server_url)"
+
+    if [ -n "$OLD_TOKEN" ] && [ "$OLD_TOKEN" != "$AIMON_TOKEN" ]; then
+        cp "$CONF_DIR/agent.yaml" "$CONF_DIR/agent.yaml.bak"
+        sed -i "s|^[[:space:]]*token:.*|token: $AIMON_TOKEN|" "$CONF_DIR/agent.yaml"
+        CHANGED="Token"
+    fi
+    if [ -n "$OLD_URL" ] && [ "$OLD_URL" != "$AIMON_URL" ]; then
+        [ -f "$CONF_DIR/agent.yaml.bak" ] || \
+            cp "$CONF_DIR/agent.yaml" "$CONF_DIR/agent.yaml.bak"
+        sed -i "s|^[[:space:]]*server_url:.*|server_url: $AIMON_URL|" \
+            "$CONF_DIR/agent.yaml"
+        CHANGED="${CHANGED:+$CHANGED und }Server-Adresse"
+    fi
+
+    if [ -n "$CHANGED" ]; then
+        info "$CHANGED in $CONF_DIR/agent.yaml aktualisiert."
+        info "Vorherige Fassung: $CONF_DIR/agent.yaml.bak"
+    else
+        info "Bestehende $CONF_DIR/agent.yaml bleibt unverändert (Token und"
+        info "Server-Adresse stimmen bereits überein)."
+    fi
 else
     cat > "$CONF_DIR/agent.yaml" <<EOF
 # Von install.sh erzeugt am $(date -Is)
@@ -92,9 +125,33 @@ fi
 
 # --------------------------------------------------------------- Selbsttest
 info "Prüfe Verbindung und Collectors …"
-if ! "$BIN_DIR/aimon-agent" check -config "$CONF_DIR/agent.yaml"; then
+CHECK_OUT="$(mktemp)"
+if ! "$BIN_DIR/aimon-agent" check -config "$CONF_DIR/agent.yaml" 2>&1 \
+        | tee "$CHECK_OUT"; then
+    rm -f "$CHECK_OUT"
     die "Selbsttest fehlgeschlagen – siehe Ausgabe oben. Der Dienst wurde NICHT gestartet."
 fi
+
+# Ein Token, das nach einer anderen Maschine benannt ist, ist fast immer ein
+# Versehen beim Kopieren - und es macht das Widerrufen einzelner Maschinen
+# wirkungslos.
+TOKEN_NAME="$(sed -n 's/.*OK: Token "\([^"]*\)".*/\1/p' "$CHECK_OUT" | head -1)"
+rm -f "$CHECK_OUT"
+case "$TOKEN_NAME" in
+    "")  ;;
+    *"$NODE_NAME"*) ;;
+    *)
+        echo ""
+        echo "ACHTUNG: Das Token heißt \"$TOKEN_NAME\", diese Maschine heißt"
+        echo "         \"$NODE_NAME\". Vermutlich wurde das Token einer anderen"
+        echo "         Maschine kopiert. Das funktioniert, macht aber das"
+        echo "         Widerrufen einzelner Maschinen unmöglich."
+        echo "         Eigenes Token anlegen:"
+        echo "           make token NAME=agent-$NODE_NAME"
+        echo "         und die Installation mit dem neuen Token wiederholen."
+        echo ""
+        ;;
+esac
 
 # ----------------------------------------------------------------- systemd
 cat > "$SERVICE_DIR/aimon-agent.service" <<'EOF'

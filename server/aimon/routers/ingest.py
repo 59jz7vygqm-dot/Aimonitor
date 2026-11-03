@@ -63,7 +63,8 @@ async def _dedupe(key: str | None) -> bool:
     return inserted is None
 
 
-async def _store(batch: Batch, dry_run: bool) -> IngestResult:
+async def _store(batch: Batch, dry_run: bool,
+                 token_name: str | None = None) -> IngestResult:
     if batch.item_count() > settings.max_items_per_batch:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -78,7 +79,7 @@ async def _store(batch: Batch, dry_run: bool) -> IngestResult:
         )
     async with pool().acquire() as conn:
         async with conn.transaction():
-            return await writer.write_batch(conn, batch)
+            return await writer.write_batch(conn, batch, token_name)
 
 
 @router.get("/echo")
@@ -104,7 +105,7 @@ async def ingest_batch(
     if await _dedupe(req.headers.get("idempotency-key")):
         return IngestResult(duplicate=True, warnings=["Idempotency-Key bereits gesehen"])
 
-    return await _store(batch, bool(dry_run))
+    return await _store(batch, bool(dry_run), p.name)
 
 
 @router.post("/scaler", status_code=status.HTTP_202_ACCEPTED)
@@ -122,7 +123,7 @@ async def ingest_scaler(
         ) from exc
     if await _dedupe(req.headers.get("idempotency-key")):
         return IngestResult(duplicate=True)
-    return await _store(scaler_map.to_batch(payload), bool(dry_run))
+    return await _store(scaler_map.to_batch(payload), bool(dry_run), p.name)
 
 
 @router.post("/privacy", status_code=status.HTTP_202_ACCEPTED)
@@ -141,7 +142,7 @@ async def ingest_privacy(
     if await _dedupe(req.headers.get("idempotency-key")):
         return IngestResult(duplicate=True)
 
-    res = await _store(privacy_map.to_batch(payload), bool(dry_run))
+    res = await _store(privacy_map.to_batch(payload), bool(dry_run), p.name)
     if not settings.allow_raw_queries and any(d.query_raw for d in payload.decisions):
         res.warnings.append(
             "query_raw wurde verworfen (AIMON_ALLOW_RAW_QUERIES=false)"

@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS nodes (
     last_seen     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Mit welchem Token diese Maschine zuletzt gemeldet hat. Dient allein der
+-- Erkennung von Tokens, die über mehrere Maschinen kopiert wurden - das macht
+-- das Widerrufen einzelner Maschinen wirkungslos.
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS token_name TEXT;
+
 CREATE TABLE IF NOT EXISTS services (
     id          BIGSERIAL PRIMARY KEY,
     key         TEXT NOT NULL UNIQUE,

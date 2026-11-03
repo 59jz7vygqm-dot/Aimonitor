@@ -291,3 +291,39 @@ async def test_thermisches_throttling_bleibt_warnung(db):
     assert "thermisch" in f["gpu.throttling"][0].title
     # Das gleichzeitige Power-Cap unter Volllast taucht NICHT zusätzlich auf.
     assert "gpu.power_cap_idle" not in f
+
+
+async def test_geteiltes_token_wird_erkannt(db):
+    """Dasselbe Token auf mehreren Maschinen funktioniert – macht aber das
+    Widerrufen einzelner Maschinen unmöglich. Es fällt sonst nie auf."""
+    for node in ("spark01", "spark02"):
+        async with db.pool().acquire() as conn:
+            async with conn.transaction():
+                await writer.write_batch(
+                    conn,
+                    Batch.model_validate({
+                        "node": {"name": node},
+                        "samples": [{"metric": "host.cpu_pct", "value": 5}],
+                    }),
+                    token_name="agent-spark02",
+                )
+    f = by_rule(await rules.evaluate())
+    inc = f["token.shared"][0]
+    assert inc.severity == "warning"
+    assert sorted(inc.context["maschinen"]) == ["spark01", "spark02"]
+    assert "zu_tun" in inc.context
+
+
+async def test_eigene_tokens_erzeugen_keinen_incident(db):
+    for node, token in (("spark01", "agent-spark01"), ("spark02", "agent-spark02")):
+        async with db.pool().acquire() as conn:
+            async with conn.transaction():
+                await writer.write_batch(
+                    conn,
+                    Batch.model_validate({
+                        "node": {"name": node},
+                        "samples": [{"metric": "host.cpu_pct", "value": 5}],
+                    }),
+                    token_name=token,
+                )
+    assert "token.shared" not in by_rule(await rules.evaluate())

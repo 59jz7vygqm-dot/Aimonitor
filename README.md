@@ -111,8 +111,21 @@ Ausgabe:
 ```
 
 Das Token wird **nur hier einmal ausgegeben**; gespeichert ist nur sein Hash.
-Pro Maschine ein eigenes Token anlegen — dann lässt sich eines widerrufen,
-ohne die anderen zu treffen (`DELETE /api/v1/tokens/<id>`).
+
+**Pro Maschine ein eigenes Token.** Technisch funktioniert auch ein geteiltes,
+aber dann legt das Widerrufen alle betroffenen Maschinen gleichzeitig still.
+`install.sh` warnt, wenn der Token-Name nicht zum Maschinennamen passt, und der
+Server meldet es als Incident `token.shared`, falls es trotzdem passiert.
+
+Ein Token später austauschen: `install.sh` einfach mit dem neuen Token erneut
+ausführen. Die übrige Konfiguration bleibt erhalten, die alte Fassung landet
+unter `/etc/aimon/agent.yaml.bak`. Danach das alte Token widerrufen:
+
+```bash
+curl -s "$AIMON_URL/api/v1/tokens" -H "Authorization: Bearer $AIMON_BOOTSTRAP_TOKEN"
+curl -s -X DELETE "$AIMON_URL/api/v1/tokens/<id>" \
+  -H "Authorization: Bearer $AIMON_BOOTSTRAP_TOKEN"
+```
 
 ### 4. Agent auf der GPU-VM installieren
 

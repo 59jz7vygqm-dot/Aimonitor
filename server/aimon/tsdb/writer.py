@@ -27,16 +27,17 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-async def upsert_node(conn: asyncpg.Connection, node) -> int:
+async def upsert_node(conn: asyncpg.Connection, node, token_name: str | None = None) -> int:
     return await conn.fetchval(
         """
-        INSERT INTO nodes (name, hostname, agent_version, labels, last_seen)
-        VALUES ($1, $2, $3, $4, now())
+        INSERT INTO nodes (name, hostname, agent_version, labels, token_name, last_seen)
+        VALUES ($1, $2, $3, $4, $5, now())
         ON CONFLICT (name) DO UPDATE SET
             hostname      = COALESCE(EXCLUDED.hostname, nodes.hostname),
             agent_version = COALESCE(EXCLUDED.agent_version, nodes.agent_version),
             labels        = CASE WHEN EXCLUDED.labels = '{}'::jsonb
                                  THEN nodes.labels ELSE EXCLUDED.labels END,
+            token_name    = COALESCE(EXCLUDED.token_name, nodes.token_name),
             last_seen     = now()
         RETURNING id
         """,
@@ -44,6 +45,7 @@ async def upsert_node(conn: asyncpg.Connection, node) -> int:
         node.hostname,
         node.agent_version,
         node.labels,
+        token_name,
     )
 
 
@@ -93,14 +95,16 @@ async def resolve_service_keys(
     return out
 
 
-async def write_batch(conn: asyncpg.Connection, batch: Batch) -> IngestResult:
+async def write_batch(
+    conn: asyncpg.Connection, batch: Batch, token_name: str | None = None
+) -> IngestResult:
     res = IngestResult()
     now = _now()
 
     for name in batch.unknown_fields():
         res.warnings.append(f"unbekanntes Feld ignoriert: {name}")
 
-    node_id = await upsert_node(conn, batch.node)
+    node_id = await upsert_node(conn, batch.node, token_name)
     svc_ids = await upsert_services(conn, node_id, batch.services)
 
     referenced = (
