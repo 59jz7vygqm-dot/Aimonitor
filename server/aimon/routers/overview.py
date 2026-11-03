@@ -46,6 +46,64 @@ def _notify_channels() -> list[str]:
     return notify.channels()
 
 
+async def _host_rows(conn) -> dict[str, dict]:
+    """Kennzahlen des Betriebssystems je Maschine.
+
+    Bei Systemen mit gemeinsamem Speicher ist das nicht nur Beiwerk, sondern
+    die eigentliche Speichergrenze für Modelle - deshalb gehört es auf die
+    Startseite und nicht in eine Unterseite.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT n.name AS node, s.metric, s.labels, l.value, l.ts
+        FROM series s
+        JOIN series_last l ON l.series_id = s.id
+        LEFT JOIN nodes n ON n.id = s.node_id
+        WHERE s.metric IN ('host.cpu_pct','host.mem_used_bytes',
+                           'host.mem_total_bytes','host.swap_used_bytes',
+                           'host.load1','host.uptime_s',
+                           'host.disk_used_bytes','host.disk_total_bytes')
+          AND n.name IS NOT NULL
+        """
+    )
+    now = dt.datetime.now(dt.timezone.utc)
+    out: dict[str, dict] = {}
+    # Platten getrennt sammeln: pro Mount ein Paar, am Ende die vollste nehmen.
+    disks: dict[str, dict[str, dict]] = {}
+
+    for r in rows:
+        node = r["node"]
+        d = out.setdefault(node, {"node": node})
+        age = (now - r["ts"]).total_seconds() if r["ts"] else None
+        d["age_s"] = min(age, d["age_s"]) if d.get("age_s") is not None else age
+
+        if r["metric"] in ("host.disk_used_bytes", "host.disk_total_bytes"):
+            mount = (r["labels"] or {}).get("mount") or "/"
+            disks.setdefault(node, {}).setdefault(mount, {})[r["metric"]] = r["value"]
+            continue
+        d[r["metric"].replace("host.", "")] = r["value"]
+
+    for node, mounts in disks.items():
+        worst = None
+        for mount, vals in mounts.items():
+            total = vals.get("host.disk_total_bytes")
+            used = vals.get("host.disk_used_bytes")
+            if not total or used is None:
+                continue
+            pct = used / total * 100.0
+            if worst is None or pct > worst["disk_pct"]:
+                worst = {"disk_mount": mount, "disk_used": used,
+                         "disk_total": total, "disk_pct": pct}
+        if worst:
+            out.setdefault(node, {"node": node}).update(worst)
+
+    for d in out.values():
+        total = d.get("mem_total_bytes")
+        used = d.get("mem_used_bytes")
+        d["mem_pct"] = (used / total * 100.0) if total and used is not None else None
+    return out
+
+
 async def _gpu_rows(conn) -> list[dict]:
     rows = await conn.fetch(
         """
@@ -141,6 +199,7 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
             """
         )
         gpus = await _gpu_rows(conn)
+        hosts = await _host_rows(conn)
 
         llm = await conn.fetch(
             """
@@ -238,6 +297,7 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
         },
         "services": [dict(r) for r in svc_rows],
         "services_by_node": _services_by_node(svc_detail),
+        "hosts": hosts,
         "gpus": gpus,
         "gpu_summary": {
             "count": len(gpus),

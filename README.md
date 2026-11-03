@@ -372,6 +372,18 @@ schlicht normal; dann die Schwelle anheben:
 AIMON_POWER_CAP_IDLE_UTIL_PCT=0   # Hinweis ganz abschalten
 ```
 
+### Agent aktualisiert, Dashboard zeigt trotzdem alte Werte
+
+`install.sh` startet den Dienst beim erneuten Lauf jetzt ausdrücklich neu —
+`systemctl enable --now` tut das **nicht**, wenn er bereits läuft, und dann
+liegt die neue Binary zwar auf der Platte, der alte Prozess läuft aber weiter.
+Bei älteren Fassungen des Skripts hilft:
+
+```bash
+sudo systemctl restart aimon-agent
+aimon-agent version
+```
+
 ### `make: *** No rule to make target`
 
 `make` muss im Wurzelverzeichnis des Repos laufen (`/opt/Aimonitor`), nicht in

@@ -513,3 +513,35 @@ async def test_overview_gruppiert_dienste_nach_maschine(client):
     assert svcs["vllm"]["model"] == "Qwen3-32B-AWQ"
     assert svcs["vllm"]["status"] == "online"
     assert svcs["ollama"]["model"] is None
+
+
+async def test_overview_liefert_host_kennzahlen(client):
+    """CPU und RAM je Maschine gehören auf die Startseite – bei Systemen mit
+    gemeinsamem Speicher ist der Arbeitsspeicher die eigentliche Grenze."""
+    await client.post("/api/v1/ingest/batch", json={
+        "node": {"name": "spark01"},
+        "samples": [
+            {"metric": "host.cpu_pct", "value": 7.5, "ts": ts()},
+            {"metric": "host.mem_total_bytes", "value": 128e9, "ts": ts()},
+            {"metric": "host.mem_used_bytes", "value": 32e9, "ts": ts()},
+            {"metric": "host.load1", "value": 1.2, "ts": ts()},
+            {"metric": "host.uptime_s", "value": 86400, "ts": ts()},
+            # Zwei Platten: die vollere muss gewinnen
+            {"metric": "host.disk_total_bytes", "value": 1e12, "ts": ts(),
+             "labels": {"mount": "/"}},
+            {"metric": "host.disk_used_bytes", "value": 2e11, "ts": ts(),
+             "labels": {"mount": "/"}},
+            {"metric": "host.disk_total_bytes", "value": 2e12, "ts": ts(),
+             "labels": {"mount": "/models"}},
+            {"metric": "host.disk_used_bytes", "value": 1.8e12, "ts": ts(),
+             "labels": {"mount": "/models"}},
+        ],
+    })
+    h = (await client.get("/api/v1/overview")).json()["hosts"]["spark01"]
+    assert h["cpu_pct"] == 7.5
+    assert h["mem_total_bytes"] == 128e9
+    assert h["mem_pct"] == pytest.approx(25.0)
+    assert h["load1"] == 1.2
+    assert h["disk_mount"] == "/models"
+    assert h["disk_pct"] == pytest.approx(90.0)
+    assert h["age_s"] is not None

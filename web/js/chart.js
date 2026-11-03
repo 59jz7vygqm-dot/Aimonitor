@@ -84,17 +84,44 @@ function fmtTime(ms, step) {
     return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-function valueTicks(min, max, count) {
-    if (min === max) { min -= 1; max += 1; }
-    const raw = (max - min) / count;
+function niceStep(raw) {
     const mag = Math.pow(10, Math.floor(Math.log10(raw)));
     const norm = raw / mag;
-    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
-    const out = [];
-    for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) {
-        out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+    return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+}
+
+/* Achsenwerte.
+ *
+ * `fmt` wird mitgegeben, weil die Beschriftung über die Schrittweite
+ * mitentscheidet: bei einer Serie, die nur zwischen 0 und 1 läuft, ergäbe
+ * der rechnerisch schöne Schritt 0,5 die Ticks 0, 0,5 und 1 - und mit einer
+ * Formatierung ohne Nachkommastellen stünde an der Achse "0, 1, 1". Deshalb
+ * wird die Schrittweite so lange vergrößert, bis alle Beschriftungen
+ * verschieden sind.
+ */
+function valueTicks(min, max, count, fmt) {
+    if (min === max) { min -= 1; max += 1; }
+    let step = niceStep((max - min) / count);
+
+    const build = (st) => {
+        const out = [];
+        for (let v = Math.ceil(min / st) * st; v <= max + st * 1e-9; v += st) {
+            out.push(Math.abs(v) < st * 1e-9 ? 0 : v);
+        }
+        return out;
+    };
+
+    let ticks = build(step);
+    if (typeof fmt === 'function') {
+        // Höchstens ein paar Versuche – danach ist die Achse ohnehin leer.
+        for (let i = 0; i < 6; i++) {
+            const labels = ticks.map((v) => fmt(v));
+            if (new Set(labels).size === labels.length && ticks.length >= 2) break;
+            step = niceStep(step * 1.5);
+            ticks = build(step);
+        }
     }
-    return out;
+    return ticks;
 }
 
 /* Liniendiagramm.
@@ -156,7 +183,7 @@ export function lineChart(container, series, opts = {}) {
     // Gitter (zurückhaltend) und Achsenbeschriftung.
     // opts.yTicks erzwingt feste Werte - nötig bei 0/1-Serien, wo ein
     // automatischer Tick bei 0,5 eine Beschriftung erfände, die es nicht gibt.
-    for (const v of (opts.yTicks || valueTicks(vMin, vMax, 4))) {
+    for (const v of (opts.yTicks || valueTicks(vMin, vMax, 4, fmt))) {
         const yy = y(v);
         if (yy < padT - 1 || yy > padT + ih + 1) continue;
         el('line', { class: 'gridline', x1: padL, x2: padL + iw, y1: yy, y2: yy }, svg);

@@ -28,9 +28,12 @@ export async function render(root, state) {
                 { metric: 'gpu.temp_c', agg: 'avg' },
                 { metric: 'gpu.util_pct', agg: 'avg' },
                 { metric: 'host.cpu_pct', agg: 'avg' },
+                { metric: 'host.mem_used_bytes', agg: 'avg' },
                 { metric: 'llm.requests_running', agg: 'avg' },
                 { metric: 'llm.requests_waiting', agg: 'avg' },
                 { metric: 'llm.kv_cache_usage_pct', agg: 'avg' },
+                { metric: 'llm.generation_tokens_total', agg: 'rate' },
+                { metric: 'llm.prompt_tokens_total', agg: 'rate' },
             ],
         }).catch(() => null);
     } catch (e) {
@@ -234,23 +237,28 @@ function machineCard(n, gpus, incByNode, trends, ov) {
 
     const body = el.querySelector('.machine-body');
 
-    // Zugang: ein Befehl zum Kopieren, nicht eine IP zum Abtippen.
-    const cmd = sshCommand(n);
+    // Kein ssh-Befehl auf der Startseite: die soll zeigen, wie es den
+    // Maschinen geht, nicht wie man sich einloggt. Der Zugang steht
+    // gesammelt auf der Diagnose-Seite, wo man ihn braucht.
     const labels = Object.entries(n.labels || {})
-        .filter(([k]) => !['ip', 'ips', 'ssh_user', 'ssh_port'].includes(k))
+        .filter(([k]) => !['ip', 'ips', 'ssh_user', 'ssh_port',
+            'installed_by'].includes(k))
         .map(([k, v]) => `${k}=${v}`);
-    const meta = h(`<div class="facts" style="padding:8px 0 4px">
-        ${cmd ? `<span class="sshline"><span>${escapeHtml(cmd)}</span>
-            <button type="button" title="Befehl kopieren">kopieren</button></span>` : ''}
+    const host = (ov.hosts || {})[n.name] || {};
+    const meta = h(`<div class="facts" style="padding:6px 0 4px">
         ${n.agent_version ? `<span class="fact">Agent <b>${
             escapeHtml(n.agent_version)}</b></span>` : ''}
-        ${n.service_count ? `<span class="fact">Dienste <b>${
-            n.service_count}</b></span>` : ''}
+        ${host.uptime_s ? `<span class="fact">Laufzeit <b>${
+            fmtDuration(host.uptime_s)}</b></span>` : ''}
+        ${host.load1 != null ? `<span class="fact">Load <b>${
+            fmtNum(host.load1, 2)}</b></span>` : ''}
+        ${host.disk_pct != null ? `<span class="fact"
+            title="Vollstes Dateisystem von allen gemeldeten">Platte
+            <code style="font-size:11px">${escapeHtml(host.disk_mount || '/')}</code>
+            <b>${fmtNum(host.disk_pct, 0)} %</b></span>` : ''}
         ${labels.length ? `<span class="fact" style="color:var(--text-muted)">${
             escapeHtml(labels.join(' · '))}</span>` : ''}
       </div>`);
-    const copyBtn = meta.querySelector('button');
-    if (copyBtn) copyBtn.addEventListener('click', () => copyText(cmd));
     body.appendChild(meta);
 
     // Welche Dienste laufen hier - das ist die zweite Frage nach "lebt die
@@ -270,18 +278,33 @@ function machineCard(n, gpus, incByNode, trends, ov) {
         }).join('')}</div>`));
     }
 
-    // Host-Kennzahlen mit Verlauf
+    // Host-Kennzahlen mit Verlauf. RAM gehört hierher und nicht auf eine
+    // Unterseite: bei Maschinen mit gemeinsamem Speicher ist er die
+    // eigentliche Grenze für Modelle.
     const cpu = trends.host.get(n.name);
-    if (cpu && cpu.length) {
-        const last = lastValue(cpu);
+    const ramPoints = trends.mem.get(n.name) || [];
+    const cpuNow = host.cpu_pct ?? lastValue(cpu || []);
+    if (cpu?.length || host.mem_total_bytes) {
         body.appendChild(h(`<div class="gpu-row">
-            <div class="gname"><b>Host</b><span>CPU</span></div>
-            <div class="cell"><span class="k">Auslastung</span>
-              <span class="v">${fmtNum(last, 0)} <small>%</small></span>
-              ${meter(last, { warn: 85, crit: 95 })}</div>
-            <div class="cell"></div>
-            <div class="trail">${sparkline(cpu, { width: 92, height: 24,
-                label: 'CPU-Verlauf', yMin: 0, yMax: 100 })}</div>
+            <div class="gname"><b>Host</b><span>CPU und RAM</span></div>
+            <div class="cell"><span class="k">CPU</span>
+              <span class="v">${cpuNow != null ? fmtNum(cpuNow, 0) : '—'}
+                <small>%</small></span>
+              ${meter(cpuNow, { warn: 85, crit: 95 })}</div>
+            <div class="cell"><span class="k">Arbeitsspeicher</span>
+              <span class="v">${host.mem_pct != null
+            ? `${fmtNum(host.mem_pct, 0)} <small>%</small>
+               <small>${fmtBytes(host.mem_used_bytes)} / ${
+                fmtBytes(host.mem_total_bytes)}</small>`
+            : '<small style="font-weight:400;color:var(--text-muted)">keine Angabe</small>'}
+              </span>
+              ${meter(host.mem_pct, { warn: 88, crit: 95 })}</div>
+            <div class="trail">${sparkline(
+            ramPoints.length ? ramPoints : (cpu || []),
+            { width: 92, height: 24,
+                label: ramPoints.length ? 'RAM-Verlauf' : 'CPU-Verlauf',
+                yMin: ramPoints.length ? undefined : 0,
+                yMax: ramPoints.length ? undefined : 100 })}</div>
           </div>`));
     }
 
@@ -436,19 +459,41 @@ function inferencePanel(ov, trends, idx) {
 
     if (trends) {
         const load = [
-            ...toSeries(trends.results[3], (s) => `laufend ${short(s.service)}`),
+            ...toSeries(trends.results[4], (s) => `laufend ${short(s.service)}`),
         ];
-        const waiting = toSeries(trends.results[4],
+        const waiting = toSeries(trends.results[5],
             (s) => `wartend ${short(s.service)}`, 1);
-        const kv = toSeries(trends.results[5], (s) => `KV-Cache ${short(s.service)}`, 2);
+        const kv = toSeries(trends.results[6], (s) => `KV-Cache ${short(s.service)}`, 2);
         const all = [...load, ...waiting];
         if (all.length) {
-            wrap.appendChild(chartCard('Auslastung der Inference-Server',
-                'Wartende Requests gehen voll in die TTFT der Benutzer ein.',
+            wrap.appendChild(chartCard('Gleichzeitige Requests',
+                'Wartende Requests gehen voll in die TTFT der Benutzer ein. '
+                + 'Bei einem einzelnen Benutzer steht hier meist 0 oder 1 – '
+                + 'wie viel Arbeit tatsächlich anfällt, zeigt der Durchsatz.',
                 (box) => lineChart(box, all, { height: 180, yMin: 0,
-                    fmt: (v) => fmtNum(v, 0), note: sourceNote(trends.results[3]) }),
+                    fmt: (v) => fmtNum(v, 0), note: sourceNote(trends.results[4]) }),
                 () => seriesTable(all, (v) => fmtNum(v, 1))));
-        } else if (kv.length) {
+        }
+
+        // Tokens pro Sekunde beschreibt die Last besser als die Zahl
+        // gleichzeitiger Requests: ein einzelner langer Request kann eine
+        // GPU auslasten, zehn kurze fast nichts.
+        const out = toSeries(trends.results[7], (s) => `Ausgabe ${short(s.service)}`);
+        const inp = toSeries(trends.results[8], (s) => `Prompt ${short(s.service)}`,
+            out.length);
+        const tok = [...out, ...inp].filter((x) => x.points.some(
+            ([, v]) => v != null && v > 0));
+        if (tok.length) {
+            wrap.appendChild(chartCard('Durchsatz',
+                'Tokens pro Sekunde, aus den vLLM-Zählern. Das ist die Zahl, '
+                + 'die sagt, wie viel die Karten wirklich zu tun haben.',
+                (box) => lineChart(box, tok, { unit: 'Tok/s', height: 180,
+                    yMin: 0, fmt: (v) => fmtNum(v, 1),
+                    note: sourceNote(trends.results[7]) }),
+                () => seriesTable(tok, (v) => fmtNum(v, 2))));
+        }
+
+        if (!all.length && kv.length) {
             wrap.appendChild(chartCard('KV-Cache', '',
                 (box) => lineChart(box, kv, { unit: '%', height: 180, yMin: 0,
                     yMax: 100, fmt: (v) => fmtNum(v, 0) }),
@@ -526,6 +571,7 @@ function indexTrends(trends) {
     const temp = new Map();
     const util = new Map();
     const host = new Map();
+    const mem = new Map();
     if (trends) {
         for (const s of trends.results[0]?.series || []) {
             temp.set(`${s.node}\u0000${s.labels.gpu}`, s.points);
@@ -536,8 +582,11 @@ function indexTrends(trends) {
         for (const s of trends.results[2]?.series || []) {
             host.set(s.node, s.points);
         }
+        for (const s of trends.results[3]?.series || []) {
+            mem.set(s.node, s.points);
+        }
     }
-    return { temp, util, host };
+    return { temp, util, host, mem };
 }
 
 function lastValue(points) {

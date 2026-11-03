@@ -190,8 +190,21 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now aimon-agent.service
-info "aimon-agent läuft."
+systemctl enable aimon-agent.service >/dev/null 2>&1 || true
+# `enable --now` startet einen bereits laufenden Dienst NICHT neu. Beim
+# zweiten Lauf liefe sonst weiter die alte Binary, obwohl die neue schon auf
+# der Platte liegt - und man sucht den Fehler an der falschen Stelle.
+systemctl restart aimon-agent.service
+sleep 1
+if systemctl is-active --quiet aimon-agent.service; then
+    RUNNING_VERSION="$("$BIN_DIR/aimon-agent" version 2>/dev/null || echo "?")"
+    info "aimon-agent läuft (Version $RUNNING_VERSION, neu gestartet)."
+else
+    echo ""
+    echo "FEHLER: aimon-agent startet nicht. Ausgabe:" >&2
+    journalctl -u aimon-agent -n 20 --no-pager >&2 || true
+    exit 1
+fi
 
 if [ "$INSTALL_TAP" = "1" ]; then
     [ -n "${TAP_UPSTREAM:-}" ] || die "INSTALL_TAP=1 braucht TAP_UPSTREAM."
@@ -228,7 +241,8 @@ SyslogIdentifier=aimon-tap
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now aimon-tap.service
+    systemctl enable aimon-tap.service >/dev/null 2>&1 || true
+    systemctl restart aimon-tap.service
     info "aimon-tap läuft auf $TAP_LISTEN -> $TAP_UPSTREAM."
     info "Jetzt noch OpenWebUI auf http://<dieser-host>:${TAP_LISTEN##*:} umstellen,"
     info "sonst fließt kein Verkehr durch den Tap und es gibt keine TTFT-Daten."
