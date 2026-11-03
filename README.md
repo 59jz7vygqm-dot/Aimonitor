@@ -49,7 +49,16 @@ sed -i "s|^AIMON_BOOTSTRAP_TOKEN=.*|AIMON_BOOTSTRAP_TOKEN=$(openssl rand -hex 32
 docker compose up -d
 ```
 
-Dashboard: `http://<host>:8420`
+Dashboard: `http://<host>:8420` — der Server lauscht per Default auf allen
+Interfaces (`AIMON_BIND=0.0.0.0` in `.env`). Für „nur lokal, Reverse-Proxy
+davor" auf `127.0.0.1` setzen.
+
+Ohne `sudo` scheitert Docker mit `permission denied ... /var/run/docker.sock`.
+Entweder `sudo` davorsetzen oder einmalig:
+
+```bash
+sudo usermod -aG docker "$USER" && newgrp docker
+```
 
 ### 2. Agent-Token anlegen
 

@@ -50,6 +50,10 @@ services:
       context: ..
       dockerfile: server/Dockerfile
     image: aimonitor/server:${AIMON_VERSION:-0.1.0}
+    # Dieses Image gibt es in keiner Registry - es wird hier gebaut.
+    # Ohne pull_policy versucht `docker compose up -d` erst zu ziehen und
+    # meldet "pull access denied", bevor es doch baut.
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       db:
