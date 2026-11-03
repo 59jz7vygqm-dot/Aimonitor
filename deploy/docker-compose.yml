@@ -88,6 +88,11 @@ services:
     ports:
       - "${AIMON_BIND:-0.0.0.0}:${AIMON_PORT:-8420}:8420"
     networks: [aimon]
+    volumes:
+      # Die Agent-Binaries werden nach dem Image-Build erzeugt (`make agent-all`
+      # oder `make agent-docker`). Ohne diesen Mount lägen sie nicht im
+      # Container und install.sh könnte sie nicht herunterladen.
+      - ../web/dist:/web/dist:ro
     # Der Server schreibt nichts ins Dateisystem außer /tmp.
     read_only: true
     tmpfs:

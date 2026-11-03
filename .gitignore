@@ -1,5 +1,7 @@
-# Build-Ergebnisse
-web/dist/
+# Build-Ergebnisse (das Verzeichnis selbst bleibt, es wird in den
+# Server-Container gemountet)
+web/dist/*
+!web/dist/.gitkeep
 *.pyc
 __pycache__/
 .pytest_cache/

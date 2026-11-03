@@ -8,7 +8,8 @@ help:
 	@echo "aimonitor $(VERSION)"
 	@echo ""
 	@echo "  make agent          Agent-Binary für diese Plattform bauen"
-	@echo "  make agent-all      Binaries für linux/amd64 und linux/arm64"
+	@echo "  make agent-all      Binaries für linux/amd64 und linux/arm64 (braucht Go)"
+	@echo "  make agent-docker   dieselben Binaries, gebaut im Container (ohne Go)"
 	@echo "  make test           Alle Tests (Go + Python)"
 	@echo "  make test-go        Go-Tests mit Race-Detector"
 	@echo "  make test-py        Python-Tests (braucht eine Test-DB)"
@@ -28,6 +29,26 @@ agent:
 	@mkdir -p web/dist
 	cd agent && CGO_ENABLED=0 go build $(GOFLAGS) -o ../web/dist/aimon-agent .
 	@echo "-> web/dist/aimon-agent"
+
+# Baut die Binaries in einem Container - ohne Go auf dem Host.
+.PHONY: agent-docker
+agent-docker:
+	@mkdir -p web/dist
+	docker run --rm -v "$(CURDIR)/agent:/src:ro" -v "$(CURDIR)/web/dist:/out" \
+		-w /src -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false \
+		-e GOCACHE=/tmp/gocache -e GOPATH=/tmp/gopath \
+		golang:1.22-alpine sh -c '\
+		  go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
+		    -o /out/aimon-agent-linux-amd64 . && \
+		  GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
+		    -o /out/aimon-agent-linux-arm64 .'
+	cp deploy/agent/install.sh web/dist/install.sh
+	@cd web/dist && sha256sum aimon-agent-linux-* install.sh > SHA256SUMS
+	@echo ""
+	@echo "Binaries in web/dist/. Der Server liefert sie unter /static/dist/ aus,"
+	@echo "sobald der Container neu gestartet wurde:"
+	@echo "  cd deploy && docker compose restart server"
+	@ls -lh web/dist/
 
 .PHONY: agent-all
 agent-all:

@@ -60,7 +60,137 @@ Entweder `sudo` davorsetzen oder einmalig:
 sudo usermod -aG docker "$USER" && newgrp docker
 ```
 
-### Wenn der Port tot bleibt
+### 2. Agent-Binaries bauen und ausliefern
+
+Das macht man **einmal auf dem Monitoring-Host**, im Wurzelverzeichnis des
+Repos (nicht in `deploy/`):
+
+```bash
+cd /opt/Aimonitor
+
+make agent-docker      # baut im Container, kein Go auf dem Host nötig
+# oder, wenn Go >= 1.22 installiert ist:
+make agent-all
+
+cd deploy && sudo docker compose restart server
+```
+
+Die Binaries landen in `web/dist/` und werden vom Server unter
+`/static/dist/` ausgeliefert. Prüfen:
+
+```bash
+curl -sI http://localhost:8420/static/dist/install.sh | head -1   # 200 OK
+```
+
+### 3. Token für den Agent anlegen
+
+Ebenfalls im Wurzelverzeichnis:
+
+```bash
+cd /opt/Aimonitor
+export AIMON_URL=http://localhost:8420
+export AIMON_BOOTSTRAP_TOKEN=$(grep ^AIMON_BOOTSTRAP_TOKEN deploy/.env | cut -d= -f2-)
+
+make token NAME=agent-gpu-vm-01
+```
+
+Ausgabe:
+
+```json
+{"id": 1, "name": "agent-gpu-vm-01", "scopes": ["ingest"],
+ "token": "aimon_NGvHHy4CWsGcuf0N8xxCaQEhLV3zRHWhPwLpAFihBJ8", ...}
+```
+
+Das Token wird **nur hier einmal ausgegeben**; gespeichert ist nur sein Hash.
+Pro Maschine ein eigenes Token anlegen — dann lässt sich eines widerrufen,
+ohne die anderen zu treffen (`DELETE /api/v1/tokens/<id>`).
+
+### 4. Agent auf der GPU-VM installieren
+
+Auf der **GPU-VM**, nicht auf dem Monitoring-Host:
+
+```bash
+curl -fsSL http://<monitoring-host>:8420/static/dist/install.sh | \
+  sudo AIMON_URL=http://<monitoring-host>:8420 \
+       AIMON_TOKEN=aimon_NGvHHy4... \
+       AIMON_LABELS=site=rack-a,role=inference \
+       sh
+```
+
+Erreicht die GPU-VM den Monitoring-Host nicht per HTTP, Binary und Skript
+kopieren:
+
+```bash
+scp web/dist/aimon-agent-linux-amd64 deploy/agent/install.sh gpu-vm-01:/tmp/
+ssh gpu-vm-01 'cd /tmp && mv aimon-agent-linux-amd64 aimon-agent && \
+  sudo AIMON_URL=http://<host>:8420 AIMON_TOKEN=aimon_... sh install.sh'
+```
+
+Das Skript installiert die Binary nach `/usr/local/bin/aimon-agent`, schreibt
+`/etc/aimon/agent.yaml` (Modus 0600, enthält das Token), führt einen
+**Selbsttest** aus und startet den systemd-Dienst erst, wenn der durchläuft.
+
+Lokal laufende Dienste findet der Agent selbst: vLLM (8000/8001/8080), Ollama
+(11434), ComfyUI (8188), OpenWebUI (3000/8080), SearXNG (8888/8080). Jeweils
+mit Fingerabdruck auf dem Endpunkt — ein offener Port allein zählt nicht.
+Zentral ist nichts einzutragen.
+
+Prüfen:
+
+```bash
+aimon-agent check              # Token, GPU, Host, Dienste, Peers
+aimon-agent discover           # gefundene Dienste als YAML
+systemctl status aimon-agent
+journalctl -u aimon-agent -f
+curl -s localhost:9100/healthz # Zähler des Agents
+```
+
+Nach ein bis zwei Minuten muss die Maschine im Dashboard unter „Explorer"
+auftauchen.
+
+Dienste auf anderen Ports, Labels oder Peer-Probes gehören in
+`/etc/aimon/agent.yaml` — die Vorlage mit allen Optionen steht in
+[`deploy/agent/agent.example.yaml`](deploy/agent/agent.example.yaml). Nach
+Änderungen: `sudo systemctl restart aimon-agent`.
+
+### 5. Echte TTFT messen (optional, aber der eigentliche Punkt)
+
+vLLM liefert nur Histogramme, Ollama gar nichts. Wer TTFT **pro Request** und
+**pro Modell** will, hängt `aimon-tap` zwischen OpenWebUI und das Backend:
+
+```bash
+sudo INSTALL_TAP=1 TAP_UPSTREAM=http://127.0.0.1:8000 TAP_LISTEN=0.0.0.0:9500 \
+     AIMON_URL=... AIMON_TOKEN=... ./deploy/agent/install.sh
+```
+
+Danach in OpenWebUI die Backend-URL von `http://gpu-vm:8000` auf
+`http://gpu-vm:9500` ändern. Der Tap reicht alles unverändert durch und streamt
+ohne Pufferung — er misst mit, er greift nicht ein.
+
+Ohne Tap funktioniert alles andere weiter; die UI sagt dann ausdrücklich, dass
+die TTFT-Werte aus Histogrammen interpoliert sind.
+
+### 6. Die beiden KI-gebauten Proxies anbinden
+
+Für den OpenTerminal-Autoscaler und den SearXNG-Privacy-Proxy liegen fertige
+Prompts bereit, die man dem Modell vorlegt, das sie gebaut hat:
+
+- [`docs/prompts/openterminal-autoscaler.md`](docs/prompts/openterminal-autoscaler.md)
+- [`docs/prompts/searxng-privacy-proxy.md`](docs/prompts/searxng-privacy-proxy.md)
+
+Platzhalter oben ersetzen, kompletten Text kopieren. Die Prompts enthalten das
+JSON-Schema, die Feldbedeutungen, das erwartete Fehlerverhalten und — beim
+Privacy-Proxy — die Datenschutzregeln, die nicht verhandelbar sind.
+
+Die zugrundeliegende Spezifikation steht in
+[`docs/integration-contract.md`](docs/integration-contract.md) und ist auch
+direkt vom Server abrufbar: `GET /api/v1/contract`.
+
+---
+
+## Fehlersuche
+
+### Container läuft, Port antwortet nicht
 
 `docker compose ps` zeigt „Running", aber nichts antwortet auf 8420:
 
@@ -114,74 +244,32 @@ Daten egal sind — **das löscht alle Messwerte**:
 sudo docker compose down -v && sudo docker compose up -d --build
 ```
 
-### 2. Agent-Token anlegen
+### Agent meldet sich nicht
+
+Auf der GPU-VM:
 
 ```bash
-export AIMON_URL=http://<host>:8420
-export AIMON_BOOTSTRAP_TOKEN=$(grep ^AIMON_BOOTSTRAP_TOKEN deploy/.env | cut -d= -f2)
-
-make token NAME=agent-gpu-vm-01
+aimon-agent check              # sagt genau, woran es hängt
+journalctl -u aimon-agent -n 50
 ```
 
-Das Token wird **nur einmal** ausgegeben; gespeichert ist nur sein Hash.
+| Befund | Bedeutung |
+|---|---|
+| `FEHLER: ... connection refused` | Die GPU-VM erreicht den Monitoring-Host nicht. Firewall, `AIMON_URL` in `/etc/aimon/agent.yaml`. |
+| `HTTP 401` | Token falsch oder widerrufen. Neues anlegen mit `make token`. |
+| `HTTP 403` | Token hat keinen `ingest`-Scope. |
+| `0 Samples (nvidia-smi: ...)` | Kein NVIDIA-Treiber oder keine Rechte. `nvidia-smi` von Hand ausführen. |
+| `0 Dienste` | Nichts auf den bekannten Ports gefunden. `aimon-agent discover` und ggf. `targets:` in die Konfiguration. |
+| `429` im Journal | Ratelimit. `AIMON_RATE_LIMIT_PER_MIN` in `deploy/.env` erhöhen. |
 
-### 3. Agent auf einer GPU-VM
+Die Maschine ist im Dashboard da, zeigt aber keine Werte? Dann prüfen, ob der
+Agent noch sendet: `curl -s localhost:9100/healthz` auf der GPU-VM. Steigt
+`buffered` dauerhaft, kommen die Batches nicht durch.
 
-```bash
-make agent-all     # baut die Binaries nach web/dist/
+### `make: *** No rule to make target`
 
-# auf der GPU-VM:
-sudo AIMON_URL=http://<host>:8420 AIMON_TOKEN=aimon_... \
-     ./deploy/agent/install.sh
-```
-
-Das Skript installiert die Binary, schreibt `/etc/aimon/agent.yaml`, führt einen
-**Selbsttest** aus und startet den systemd-Dienst erst, wenn der durchläuft.
-Lokal laufende Dienste findet der Agent selbst (vLLM, Ollama, ComfyUI,
-OpenWebUI, SearXNG) — zentral ist nichts einzutragen.
-
-Prüfen:
-
-```bash
-aimon-agent check       # Token, GPU, Host, Dienste, Peers
-aimon-agent discover    # gefundene Dienste als YAML
-journalctl -u aimon-agent -f
-```
-
-### 4. Echte TTFT messen (optional, aber der eigentliche Punkt)
-
-vLLM liefert nur Histogramme, Ollama gar nichts. Wer TTFT **pro Request** und
-**pro Modell** will, hängt `aimon-tap` zwischen OpenWebUI und das Backend:
-
-```bash
-sudo INSTALL_TAP=1 TAP_UPSTREAM=http://127.0.0.1:8000 TAP_LISTEN=0.0.0.0:9500 \
-     AIMON_URL=... AIMON_TOKEN=... ./deploy/agent/install.sh
-```
-
-Danach in OpenWebUI die Backend-URL von `http://gpu-vm:8000` auf
-`http://gpu-vm:9500` ändern. Der Tap reicht alles unverändert durch und streamt
-ohne Pufferung — er misst mit, er greift nicht ein.
-
-Ohne Tap funktioniert alles andere weiter; die UI sagt dann ausdrücklich, dass
-die TTFT-Werte aus Histogrammen interpoliert sind.
-
-### 5. Die beiden KI-gebauten Proxies anbinden
-
-Für den OpenTerminal-Autoscaler und den SearXNG-Privacy-Proxy liegen fertige
-Prompts bereit, die man dem Modell vorlegt, das sie gebaut hat:
-
-- [`docs/prompts/openterminal-autoscaler.md`](docs/prompts/openterminal-autoscaler.md)
-- [`docs/prompts/searxng-privacy-proxy.md`](docs/prompts/searxng-privacy-proxy.md)
-
-Platzhalter oben ersetzen, kompletten Text kopieren. Die Prompts enthalten das
-JSON-Schema, die Feldbedeutungen, das erwartete Fehlerverhalten und — beim
-Privacy-Proxy — die Datenschutzregeln, die nicht verhandelbar sind.
-
-Die zugrundeliegende Spezifikation steht in
-[`docs/integration-contract.md`](docs/integration-contract.md) und ist auch
-direkt vom Server abrufbar: `GET /api/v1/contract`.
-
----
+`make` muss im Wurzelverzeichnis des Repos laufen (`/opt/Aimonitor`), nicht in
+`deploy/`.
 
 ## Ohne Hardware ausprobieren
 
