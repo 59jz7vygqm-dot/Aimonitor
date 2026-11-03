@@ -42,15 +42,32 @@ def test_aufloesung_waechst_mit_dem_zeitraum():
         return pick_resolution(now - dt.timedelta(**kw), now, 400)
 
     assert pr(hours=1) == (0, "raw")
-    assert pr(hours=6) == (60, "rollup_60")
+    assert pr(hours=6) == (0, "raw")
     assert pr(days=7) == (60, "rollup_60")
-    assert pr(days=30) == (3600, "rollup_3600")
+    assert pr(days=30) == (60, "rollup_60")
     assert pr(days=365) == (3600, "rollup_3600")
 
 
-def test_aufloesung_respektiert_max_points():
+def test_quelle_haengt_an_der_fensterbreite_nicht_an_der_punktzahl():
+    """Wer wenige Punkte will – etwa für eine Sparkline – soll gröbere
+    Buckets über denselben Daten bekommen, nicht plötzlich eine andere
+    Quelle. Sonst verschwindet die Kurve, solange der Rollup hinterherhinkt."""
     now = dt.datetime.now(dt.timezone.utc)
     start = now - dt.timedelta(hours=1)
-    # Wenige Punkte gewünscht -> gröbere Quelle
-    assert pick_resolution(start, now, 10)[1] == "rollup_60"
-    assert pick_resolution(start, now, 2000)[1] == "raw"
+    for points in (10, 60, 400, 2000):
+        bucket, source = pick_resolution(start, now, points)
+        assert source == "raw", f"{points} Punkte -> {source}"
+        assert bucket == 0
+
+
+def test_lange_fenster_nutzen_die_verdichteten_daten():
+    now = dt.datetime.now(dt.timezone.utc)
+
+    def src(**kw):
+        return pick_resolution(now - dt.timedelta(**kw), now, 60)[1]
+
+    assert src(hours=6) == "raw"
+    assert src(hours=7) == "rollup_60"
+    assert src(days=30) == "rollup_60"
+    assert src(days=60) == "rollup_3600"
+    assert src(days=400) == "rollup_3600"

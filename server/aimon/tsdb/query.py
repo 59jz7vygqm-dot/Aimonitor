@@ -26,13 +26,28 @@ class SeriesMeta:
     is_counter: bool
 
 
+# Ab welcher Fensterbreite auf die verdichteten Daten gewechselt wird.
+RAW_MAX_SPAN_S = 6 * 3600          # bis 6 h aus den Rohdaten
+ROLLUP_60_MAX_SPAN_S = 45 * 86400  # bis 45 Tage aus dem Minuten-Rollup
+
+
 def pick_resolution(start: dt.datetime, end: dt.datetime, max_points: int) -> tuple[int, str]:
-    """Bucketgröße und Quelle wählen. Lieber groblösig als 100k Punkte ins Browser."""
+    """Quelle und Bucketgröße wählen.
+
+    Die Quelle hängt allein an der Fensterbreite, nicht an der Zahl der
+    gewünschten Punkte. Das war vorher anders und hatte eine unangenehme
+    Folge: wer wenige Punkte anforderte - etwa für eine Sparkline -, bekam
+    plötzlich die verdichteten Daten statt gröberer Buckets über denselben
+    Rohdaten. Lief der Rollup-Worker noch nicht oder hinkte er hinterher,
+    kam gar nichts zurück und die Kurve verschwand kommentarlos.
+
+    `max_points` bestimmt nur noch, wie grob innerhalb der Quelle gebündelt
+    wird.
+    """
     span = max(1.0, (end - start).total_seconds())
-    ideal = span / max(1, max_points)
-    if ideal <= 30:
+    if span <= RAW_MAX_SPAN_S:
         return 0, "raw"
-    if ideal <= 1800:
+    if span <= ROLLUP_60_MAX_SPAN_S:
         return 60, "rollup_60"
     return 3600, "rollup_3600"
 
@@ -133,6 +148,30 @@ async def range_query(
             """,
             series_ids, start, end, bucket_s,
         )
+        if not rows:
+            # Der Rollup-Worker läuft im Minutentakt und hinkt nach einem
+            # Neustart hinterher. Statt eine leere Kurve zu zeigen, lieber
+            # die Rohdaten nehmen, solange sie noch vorhanden sind.
+            step = max(1, int((end - start).total_seconds() / max(1, max_points)))
+            rows = await conn.fetch(
+                """
+                SELECT series_id,
+                       to_timestamp(floor(extract(epoch FROM ts) / $4) * $4) AS bucket,
+                       avg(value) AS v,
+                       max(value) AS vmax, min(value) AS vmin,
+                       (array_agg(value ORDER BY ts DESC))[1] AS vlast,
+                       (array_agg(value ORDER BY ts ASC))[1] AS vfirst,
+                       count(*) AS n
+                FROM samples
+                WHERE series_id = ANY($1::bigint[]) AND ts >= $2 AND ts < $3
+                GROUP BY series_id, bucket
+                ORDER BY bucket
+                """,
+                series_ids, start, end, step,
+            )
+            if rows:
+                source = "raw"
+                bucket_s = step
 
     out: dict[int, list[tuple[dt.datetime, float | None]]] = {sid: [] for sid in series_ids}
     if not want_rate:

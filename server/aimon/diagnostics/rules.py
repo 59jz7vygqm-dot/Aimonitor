@@ -165,11 +165,19 @@ async def _rule_gpu(conn) -> list[Finding]:
             near_limit = (
                 power is not None and limit and power >= limit * 0.9
             )
-            if util is not None and util < settings.power_cap_idle_util_pct:
+            # Nur melden, wenn die Karte wirklich nahe am Limit zieht, ohne zu
+            # rechnen. Ein gesetztes Flag bei 3 von 72 W ist auf Modulen mit
+            # gemeinsamem Leistungsbudget der Normalzustand - daraus einen
+            # Incident zu machen, der sich nie auflöst, wäre Dauerinventar
+            # statt Information. Sichtbar bleibt es als neutrale Marke an der
+            # GPU-Karte im Dashboard.
+            if (util is not None
+                    and util < settings.power_cap_idle_util_pct
+                    and near_limit):
                 out.append(
                     Finding(
                         "gpu.power_cap_idle",
-                        "warning" if near_limit else "info",
+                        "warning",
                         "gpu", subj,
                         f"GPU {subj} meldet Power-Limit bei nur {util:.0f} % Last",
                         {

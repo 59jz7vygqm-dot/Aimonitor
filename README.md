@@ -64,10 +64,15 @@ Entweder `sudo` davorsetzen oder einmalig:
 sudo usermod -aG docker "$USER" && newgrp docker
 ```
 
+> **Wo läuft was?** `make`, `git` und `docker compose` laufen **nur auf dem
+> Monitoring-Host**, im Wurzelverzeichnis des Repos (`/opt/Aimonitor`). Auf den
+> GPU-Maschinen gibt es kein Repo und kein `make` — dort wird nur die fertige
+> Agent-Binary installiert.
+
 ### 2. Agent-Binaries bauen und ausliefern
 
-Das macht man **einmal auf dem Monitoring-Host**, im Wurzelverzeichnis des
-Repos (nicht in `deploy/`):
+Auf dem **Monitoring-Host**, im Wurzelverzeichnis des Repos (nicht in
+`deploy/`):
 
 ```bash
 cd /opt/Aimonitor

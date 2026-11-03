@@ -348,7 +348,14 @@ gemeinsamem Speicher ist der Arbeitsspeicher des Hosts die Grenze.">
       </div>`);
 }
 
-/* Ein Wort zum Zustand. Power-Cap unter Last ist neutral, nicht Warnung. */
+/* Ein Wort zum Zustand.
+ *
+ * Dieselbe Unterscheidung wie im Regelwerk: ein gesetztes Power-Cap-Flag
+ * allein bedeutet nichts. Unter Last ist es der Normalbetrieb, und im
+ * Leerlauf weit unterhalb des Limits ist es ein Treiber-Eigenheit vieler
+ * Module mit gemeinsamem Leistungsbudget. Beunruhigend ist nur der Fall
+ * dazwischen: die Karte zieht fast ihr Limit, obwohl sie kaum rechnet.
+ */
 function gpuStateChip(g) {
     if (!g.fresh) {
         return statusHtml('warning', fmtDuration(g.age_s) + ' alt');
@@ -357,14 +364,30 @@ function gpuStateChip(g) {
     if (g.throttle_thermal > 0) bad.push('thermisch');
     if (g.throttle_hw > 0) bad.push('Hardware');
     if (bad.length) return statusHtml('warning', bad.join('/'));
+
     if (g.throttle_power > 0) {
-        return (g.util_pct ?? 0) >= 30
-            ? `<span class="status muted" title="Die Karte arbeitet an ihrem
-Leistungslimit. Unter Last ist das der Normalbetrieb."><span class="ico"
->○</span>am Limit</span>`
-            : statusHtml('warning', 'Limit im Leerlauf');
+        if ((g.util_pct ?? 0) >= 30) {
+            return chip('am Limit', 'Die Karte arbeitet an ihrem '
+                + 'Leistungslimit. Unter Last ist das der Normalbetrieb.');
+        }
+        const nearLimit = g.power_w != null && g.power_limit_w
+            && g.power_w >= g.power_limit_w * 0.9;
+        if (nearLimit) {
+            return statusHtml('warning', 'Limit im Leerlauf');
+        }
+        return chip('Limit-Flag gesetzt',
+            `Der Treiber meldet das Leistungslimit, die Karte zieht aber nur `
+            + `${fmtNum(g.power_w, 0)} von ${fmtNum(g.power_limit_w, 0)} W. `
+            + `Bei Modulen mit gemeinsamem Leistungsbudget ist das im Leerlauf `
+            + `normal.`);
     }
     return statusHtml('good', 'ok');
+}
+
+/* Neutrale Marke: sichtbar, aber ohne Warnfarbe und ohne Warnsymbol. */
+function chip(text, title) {
+    return `<span class="status muted" title="${escapeHtml(title)}">`
+        + `<span class="ico" aria-hidden="true">○</span>${escapeHtml(text)}</span>`;
 }
 
 /* -------------------------------------------------------------- Inference */
@@ -542,10 +565,15 @@ export function gpuState(r) {
     if (r.throttle_hw > 0) bad.push('Hardware');
     if (bad.length) return statusHtml('warning', 'throttelt: ' + bad.join(', '));
     if (r.throttle_power > 0) {
-        return (r.util_pct ?? 0) >= 30
-            ? statusHtml('muted', 'am Leistungslimit')
-            : statusHtml('warning',
-                `Leistungslimit bei ${fmtNum(r.util_pct, 0)} % Last`);
+        if ((r.util_pct ?? 0) >= 30) {
+            return statusHtml('muted', 'am Leistungslimit');
+        }
+        const nearLimit = r.power_w != null && r.power_limit_w
+            && r.power_w >= r.power_limit_w * 0.9;
+        return nearLimit
+            ? statusHtml('warning',
+                `Leistungslimit bei ${fmtNum(r.util_pct, 0)} % Last`)
+            : statusHtml('muted', 'Limit-Flag gesetzt');
     }
     return statusHtml('good', 'ok');
 }

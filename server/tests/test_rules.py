@@ -239,8 +239,10 @@ async def test_power_cap_unter_last_ist_keine_warnung(db):
     assert "gpu.power_cap_idle" not in f
 
 
-async def test_power_cap_im_leerlauf_wird_gemeldet(db):
-    """Greift das Limit, obwohl die Karte nichts tut, ist das erklärungsbedürftig."""
+async def test_power_cap_flag_ohne_last_und_ohne_verbrauch_ist_kein_incident(db):
+    """Ein gesetztes Flag bei 3 von 72 W ist auf Modulen mit gemeinsamem
+    Leistungsbudget der Normalzustand. Ein Incident, der sich nie auflöst,
+    wäre Dauerinventar statt Information – sichtbar bleibt es am Dashboard."""
     await write(db, {
         "node": {"name": "spark01"},
         "samples": [
@@ -250,16 +252,12 @@ async def test_power_cap_im_leerlauf_wird_gemeldet(db):
             {"metric": "gpu.power_limit_w", "value": 72, "labels": {"gpu": "0"}},
         ],
     })
-    f = by_rule(await rules.evaluate())
-    inc = f["gpu.power_cap_idle"][0]
-    # Bei 3 von 72 W ist nichts am Limit – nur Info, keine Warnung.
-    assert inc.severity == "info"
-    assert inc.context["util_pct"] == 0
-    assert "zu_prüfen" in inc.context
+    assert "gpu.power_cap_idle" not in by_rule(await rules.evaluate())
 
 
 async def test_power_cap_am_limit_ohne_last_ist_warnung(db):
-    """Nahe am Limit bei fast keiner Last: da stimmt etwas nicht."""
+    """Nahe am Limit bei fast keiner Last: da stimmt etwas nicht.
+    Das ist der einzige Fall, der gemeldet wird."""
     await write(db, {
         "node": {"name": "n"},
         "samples": [
@@ -270,7 +268,10 @@ async def test_power_cap_am_limit_ohne_last_ist_warnung(db):
         ],
     })
     f = by_rule(await rules.evaluate())
-    assert f["gpu.power_cap_idle"][0].severity == "warning"
+    inc = f["gpu.power_cap_idle"][0]
+    assert inc.severity == "warning"
+    assert inc.context["util_pct"] == 5
+    assert "zu_prüfen" in inc.context
 
 
 async def test_thermisches_throttling_bleibt_warnung(db):
