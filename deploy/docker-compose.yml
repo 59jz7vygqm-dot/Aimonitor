@@ -59,8 +59,14 @@ services:
       db:
         condition: service_healthy
     environment:
-      AIMON_DATABASE_URL: >-
-        postgresql://${POSTGRES_USER:-aimon}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-aimon}
+      # Einzelteile statt fertiger URL: ein Passwort aus
+      # `openssl rand -base64 32` enthält oft ein '/', und das zerlegt eine
+      # von Hand zusammengebaute postgresql://-URL. Der Server kodiert selbst.
+      AIMON_DB_HOST: db
+      AIMON_DB_PORT: "5432"
+      AIMON_DB_USER: ${POSTGRES_USER:-aimon}
+      AIMON_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      AIMON_DB_NAME: ${POSTGRES_DB:-aimon}
       AIMON_BOOTSTRAP_TOKEN: ${AIMON_BOOTSTRAP_TOKEN:?AIMON_BOOTSTRAP_TOKEN muss gesetzt sein}
       AIMON_READ_TOKEN: ${AIMON_READ_TOKEN:-}
       AIMON_ALLOW_RAW_QUERIES: ${AIMON_ALLOW_RAW_QUERIES:-false}

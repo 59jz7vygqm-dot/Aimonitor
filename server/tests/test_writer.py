@@ -357,9 +357,68 @@ async def test_wartet_auf_datenbank_statt_zu_sterben(db, monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         await db_mod.wait_for_db(timeout_s=1.0)
     # Die Meldung muss sagen, was zu prüfen ist.
-    assert "AIMON_DATABASE_URL" in str(exc.value)
+    assert "docker compose ps" in str(exc.value)
 
     monkeypatch.setattr(settings, "database_url", good)
     await db_mod.wait_for_db(timeout_s=10.0)
     async with db_mod.pool().acquire() as conn:
         assert await conn.fetchval("SELECT 1") == 1
+
+
+async def test_kaputte_adresse_wird_nicht_120s_wiederholt(db, monkeypatch):
+    """Ein Passwort mit '/' in einer handgebauten URL ist ein Dauerfehler.
+    Darauf zu warten verschleppt nur die Diagnose."""
+    import time as _time
+
+    from aimon import db as db_mod
+    from aimon.config import settings
+
+    good = settings.database_url
+    monkeypatch.setattr(settings, "database_url",
+                        "postgresql://aimon:c8RjEbKqsXNnBuBqSB/x@db:5432/aimon")
+    await db_mod.close_pool()
+
+    t0 = _time.monotonic()
+    with pytest.raises(RuntimeError) as exc:
+        await db_mod.wait_for_db(timeout_s=60.0)
+    assert _time.monotonic() - t0 < 5.0, "hätte sofort aufgeben müssen"
+    # Die Meldung muss den Weg aus dem Problem nennen.
+    assert "AIMON_DB_PASSWORD" in str(exc.value)
+
+    monkeypatch.setattr(settings, "database_url", good)
+    await db_mod.wait_for_db(timeout_s=10.0)
+
+
+async def test_passwort_mit_slash_funktioniert_echt(db, monkeypatch):
+    """Ende zu Ende: Rolle mit '/' im Passwort anlegen und damit verbinden.
+
+    Genau der Fall, der in der Praxis den Server am Start gehindert hat.
+    """
+    import asyncpg
+    from urllib.parse import urlparse
+
+    from aimon.config import _database_url, settings
+
+    pw = "c8RjEbKqsXNnBuBqSB/x+y=="
+    parsed = urlparse(settings.database_url)
+
+    async with db.pool().acquire() as conn:
+        await conn.execute("DROP ROLE IF EXISTS slashuser")
+        await conn.execute(f"CREATE ROLE slashuser LOGIN PASSWORD '{pw}'")
+    try:
+        monkeypatch.delenv("AIMON_DATABASE_URL", raising=False)
+        monkeypatch.setenv("AIMON_DB_HOST", parsed.hostname or "127.0.0.1")
+        monkeypatch.setenv("AIMON_DB_PORT", str(parsed.port or 5432))
+        monkeypatch.setenv("AIMON_DB_USER", "slashuser")
+        monkeypatch.setenv("AIMON_DB_PASSWORD", pw)
+        monkeypatch.setenv("AIMON_DB_NAME", (parsed.path or "/aimon").lstrip("/"))
+
+        conn = await asyncpg.connect(_database_url(), timeout=5)
+        try:
+            assert await conn.fetchval("SELECT current_user") == "slashuser"
+        finally:
+            await conn.close()
+    finally:
+        async with db.pool().acquire() as c:
+            await c.execute("DROP OWNED BY slashuser")
+            await c.execute("DROP ROLE IF EXISTS slashuser")

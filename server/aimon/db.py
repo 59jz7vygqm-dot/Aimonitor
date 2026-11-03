@@ -70,7 +70,6 @@ async def wait_for_db(timeout_s: float = 120.0) -> None:
     """
     delay = 0.5
     deadline = time.monotonic() + timeout_s
-    last: Exception | None = None
     while True:
         try:
             p = await init_pool()
@@ -78,18 +77,49 @@ async def wait_for_db(timeout_s: float = 120.0) -> None:
                 await conn.fetchval("SELECT 1")
             return
         except Exception as exc:  # noqa: BLE001
-            last = exc
             await close_pool()
+            fatal = _fatal_reason(exc)
+            if fatal:
+                # Kaputte Zugangsdaten werden durch Warten nicht besser.
+                raise RuntimeError(fatal) from exc
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     f"Datenbank nach {timeout_s:.0f}s nicht erreichbar: {exc}\n"
-                    f"AIMON_DATABASE_URL prüfen (Host, Passwort, Datenbankname). "
-                    f"Im Compose-Setup: läuft der Dienst 'db' und ist er healthy?"
+                    f"Läuft der Dienst 'db' und ist er healthy? "
+                    f"(docker compose ps)"
                 ) from exc
             log.warning("Datenbank noch nicht bereit (%s) – neuer Versuch in %.1fs",
                         exc, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 5.0)
+
+
+def _fatal_reason(exc: Exception) -> str | None:
+    """Fehler, bei denen Warten sinnlos ist, mit einer brauchbaren Erklärung."""
+    if isinstance(exc, ValueError):
+        return (
+            f"Die Datenbank-Adresse ist nicht lesbar: {exc}\n"
+            f"Das passiert, wenn AIMON_DATABASE_URL von Hand zusammengesetzt "
+            f"wurde und das Passwort Sonderzeichen wie '/' oder '@' enthält. "
+            f"Stattdessen AIMON_DB_HOST / AIMON_DB_USER / AIMON_DB_PASSWORD / "
+            f"AIMON_DB_NAME setzen – die werden korrekt kodiert."
+        )
+    if isinstance(exc, asyncpg.InvalidPasswordError):
+        return (
+            "Falsches Datenbank-Passwort.\n"
+            "PostgreSQL behält das Passwort aus der ersten Initialisierung im "
+            "Volume. Wurde POSTGRES_PASSWORD nachträglich geändert, passt es "
+            "nicht mehr. Altes Passwort eintragen oder – wenn die Messwerte "
+            "entbehrlich sind – 'docker compose down -v' und neu starten."
+        )
+    if isinstance(exc, asyncpg.InvalidCatalogNameError):
+        return (
+            f"Die Datenbank existiert nicht: {exc}\n"
+            f"AIMON_DB_NAME bzw. POSTGRES_DB prüfen."
+        )
+    if isinstance(exc, asyncpg.InvalidAuthorizationSpecificationError):
+        return f"Anmeldung abgelehnt: {exc}\nAIMON_DB_USER prüfen."
+    return None
 
 
 async def migrate() -> None:

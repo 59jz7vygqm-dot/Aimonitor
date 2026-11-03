@@ -74,7 +74,9 @@ Häufigste Ursachen:
 | Logzeile | Bedeutung |
 |---|---|
 | `Datenbank noch nicht bereit …` | normal beim Start, der Server wartet bis zu 120 s |
-| `Datenbank nach 120s nicht erreichbar` | `POSTGRES_PASSWORD` in `.env` passt nicht zum Volume. Die DB behält das Passwort aus der ersten Initialisierung. |
+| `Datenbank nach 120s nicht erreichbar` | Der Dienst `db` läuft nicht — `docker compose ps` |
+| `Falsches Datenbank-Passwort` | `POSTGRES_PASSWORD` wurde nach der ersten Initialisierung geändert. PostgreSQL behält das alte Passwort im Volume. |
+| `Die Datenbank-Adresse ist nicht lesbar` | Eine selbst gesetzte `AIMON_DATABASE_URL` mit Sonderzeichen im Passwort. Stattdessen `AIMON_DB_*` benutzen. |
 | `Address already in use` | Port 8420 ist belegt, `AIMON_PORT` ändern |
 | Container `Restarting` | Startfehler, siehe Logzeilen darüber |
 
@@ -246,6 +248,26 @@ Entscheidung für den Einzelbetrieb — wer sie nicht will, setzt das Token oder
 stellt einen Reverse-Proxy mit Authentifizierung davor.
 
 ---
+
+### Datenbank-Zugangsdaten
+
+Der Server baut die Verbindungsadresse aus Einzelteilen und kodiert sie selbst:
+
+```
+AIMON_DB_HOST=db
+AIMON_DB_PORT=5432
+AIMON_DB_USER=aimon
+AIMON_DB_PASSWORD=<beliebig, auch mit / @ : # %>
+AIMON_DB_NAME=aimon
+```
+
+Im Compose-Setup werden die aus `POSTGRES_*` in `.env` gefüllt; eintragen muss
+man nur `POSTGRES_PASSWORD`.
+
+`AIMON_DATABASE_URL` wird weiterhin akzeptiert und hat Vorrang — dann ist man
+selbst für die Kodierung zuständig. **Ein `/` im Passwort zerlegt eine von Hand
+gebaute `postgresql://`-URL**, und `openssl rand -base64 32` erzeugt in gut der
+Hälfte der Fälle eins. Deshalb ist der Weg über die Einzelteile der Default.
 
 ## Entwicklung
 

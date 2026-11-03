@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 
 def _b(key: str, default: bool) -> bool:
@@ -26,16 +27,37 @@ def _f(key: str, default: float) -> float:
         return default
 
 
+
+def _database_url() -> str:
+    """DSN ermitteln.
+
+    Entweder komplett aus AIMON_DATABASE_URL, oder aus Einzelteilen
+    zusammengesetzt. Letzteres ist der Normalfall, weil ein Passwort aus
+    `openssl rand -base64 32` mit hoher Wahrscheinlichkeit ein `/` enthält -
+    und das zerlegt eine von Hand zusammengeklebte URL, weil der Parser dort
+    den Pfad beginnen sieht. Deshalb wird das Passwort hier prozent-kodiert.
+    """
+    explicit = os.getenv("AIMON_DATABASE_URL")
+    if explicit:
+        return explicit
+
+    host = os.getenv("AIMON_DB_HOST", "localhost")
+    port = os.getenv("AIMON_DB_PORT", "5432")
+    user = os.getenv("AIMON_DB_USER", "aimon")
+    password = os.getenv("AIMON_DB_PASSWORD", "aimon")
+    name = os.getenv("AIMON_DB_NAME", "aimon")
+
+    return (
+        f"postgresql://{quote(user, safe='')}:{quote(password, safe='')}"
+        f"@{host}:{port}/{quote(name, safe='')}"
+    )
+
+
 @dataclass
 class Settings:
     version: str = "0.1.0"
 
-    database_url: str = field(
-        default_factory=lambda: os.getenv(
-            "AIMON_DATABASE_URL",
-            "postgresql://aimon:aimon@localhost:5432/aimon",
-        )
-    )
+    database_url: str = field(default_factory=lambda: _database_url())
     db_pool_min: int = field(default_factory=lambda: _i("AIMON_DB_POOL_MIN", 2))
     db_pool_max: int = field(default_factory=lambda: _i("AIMON_DB_POOL_MAX", 12))
 
