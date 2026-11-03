@@ -21,6 +21,10 @@ Was es kann:
 - **Fehlerbericht als kopierbarer Prompt**: beschreibt Aufbau, Messwerte und
   Fehlerbild in einem Textblock, den man einem anderen Modell oder einem anderen
   Menschen vorlegen kann. Auf Wunsch mit anonymisierten Hostnamen.
+- **Zugang zu den Maschinen**: der Agent meldet seine Adressen, das Dashboard
+  zeigt den fertigen `ssh`-Befehl zum Kopieren — auch neben dem Fehlerbericht.
+- **Benachrichtigung** per Webhook oder E-Mail, bewusst zurückhaltend:
+  nur bei kritischen Incidents, die eine Weile bestehen, einmal pro Vorfall.
 - **Neue Server anhängen**, ohne zentral etwas zu konfigurieren.
 
 ```
@@ -188,6 +192,46 @@ direkt vom Server abrufbar: `GET /api/v1/contract`.
 
 ---
 
+## Benachrichtigungen
+
+Standardmäßig aus. Eingeschaltet meldet sich aimonitor **nur** bei Incidents ab
+einer Mindestschwere (Default `critical`), die länger als eine Mindestdauer
+bestehen (Default 5 Minuten), genau einmal je Incident plus einer Entwarnung,
+und höchstens zehnmal pro Stunde über alles.
+
+Das ist Absicht. Eine Benachrichtigung, die zu oft kommt, wird nach einer Woche
+weggefiltert — und fehlt dann an dem Tag, an dem sie wichtig gewesen wäre.
+Mit `AIMON_ALERT_MIN_SEVERITY=warning` bekommst du bei einem normalen Stack
+mehrere Meldungen am Tag; das ist selten gewollt.
+
+**Webhook** ist der bequemere Weg — kein SMTP-Passwort, kommt direkt aufs Handy.
+Funktioniert mit ntfy, Gotify, Discord, Slack, Home Assistant:
+
+```bash
+# in deploy/.env
+AIMON_ALERT_WEBHOOK_URL=https://ntfy.sh/dein-geheimes-topic
+AIMON_PUBLIC_URL=http://aimon.lan:8420
+```
+
+**E-Mail** über SMTP:
+
+```bash
+AIMON_ALERT_SMTP_HOST=smtp.example.net
+AIMON_ALERT_SMTP_PORT=587
+AIMON_ALERT_SMTP_USER=aimon@example.net
+AIMON_ALERT_SMTP_PASSWORD=...
+AIMON_ALERT_MAIL_TO=du@example.net
+```
+
+Testen, ohne auf einen echten Vorfall zu warten:
+
+```bash
+curl -s -X POST localhost:8420/api/v1/alerts/test   -H "Authorization: Bearer $AIMON_BOOTSTRAP_TOKEN" | python3 -m json.tool
+```
+
+Was eingerichtet ist und was zuletzt verschickt wurde, steht unter
+`GET /api/v1/alerts` und oben auf der Diagnose-Seite.
+
 ## Fehlersuche
 
 ### Container läuft, Port antwortet nicht
@@ -265,6 +309,40 @@ journalctl -u aimon-agent -n 50
 Die Maschine ist im Dashboard da, zeigt aber keine Werte? Dann prüfen, ob der
 Agent noch sendet: `curl -s localhost:9100/healthz` auf der GPU-VM. Steigt
 `buffered` dauerhaft, kommen die Batches nicht durch.
+
+### GPU ohne Speicherangabe
+
+Auf Systemen mit gemeinsamem Speicher (Grace Blackwell / DGX Spark) liefert
+`nvidia-smi --query-gpu=memory.total` ein `N/A`. Der Agent fällt dann auf
+`nvidia-smi -q -d MEMORY` zurück und kennzeichnet die Werte als `unified` —
+„frei" bedeutet dort etwas anderes als bei einer Karte mit eigenem VRAM.
+
+Bleibt die Anzeige leer, zeigt dieser Befehl auf der betroffenen Maschine
+Rohausgabe und Auswertung nebeneinander:
+
+```bash
+aimon-agent gpudump
+```
+
+Erkennt der Agent dort nichts, ist die Ausgabe das, was ich brauche, um den
+Parser anzupassen. Bei gemeinsamem Speicher ist ohnehin der Arbeitsspeicher
+des Hosts die eigentliche Grenze — siehe `host.mem_used_bytes` im Explorer.
+
+### „GPU meldet Power-Limit bei nur 0 % Last“
+
+Ein Hinweis, keine Warnung. Eine Karte, die **unter Last** an ihrem
+Leistungslimit arbeitet, tut genau das, wofür sie gebaut ist — eine L4 mit 70
+von 72 W bei 100 % Auslastung ist der Normalzustand. Gemeldet wird deshalb nur
+der umgekehrte Fall: das Limit greift, obwohl die Karte kaum rechnet.
+
+Mögliche Ursachen: ein zu eng gesetztes Limit (`nvidia-smi -q -d POWER`),
+schwache oder geteilte Stromversorgung, oder der Treiber meldet das Flag
+dauerhaft. Bei Modulen mit gemeinsamem Leistungsbudget ist es im Leerlauf
+schlicht normal; dann die Schwelle anheben:
+
+```bash
+AIMON_POWER_CAP_IDLE_UTIL_PCT=0   # Hinweis ganz abschalten
+```
 
 ### `make: *** No rule to make target`
 

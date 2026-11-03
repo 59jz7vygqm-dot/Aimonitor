@@ -401,3 +401,61 @@ export function seriesTable(series, fmt = fmtNum) {
     return `<div class="table-wrap scroll-y"><table class="data">${head}<tbody>${
         body}</tbody></table></div>`;
 }
+
+
+/* Sparkline: Verlauf auf kleinstem Raum, ohne Achsen und Beschriftung.
+ *
+ * Gedacht als Begleiter einer Zahl, nicht als eigenständiges Diagramm - sie
+ * beantwortet nur "steigt das oder fällt es", und das soll man im Vorbeigehen
+ * sehen. Für alles Genauere gibt es die großen Charts.
+ */
+export function sparkline(points, opts = {}) {
+    const w = opts.width || 120;
+    const h = opts.height || 28;
+    const color = opts.color || 'var(--series-1)';
+    const vals = (points || []).filter(
+        (p) => p[1] !== null && p[1] !== undefined && !Number.isNaN(p[1]));
+    if (vals.length < 2) {
+        return `<svg class="spark" width="${w}" height="${h}" aria-hidden="true"></svg>`;
+    }
+
+    let min = opts.yMin, max = opts.yMax;
+    if (min === undefined) min = Math.min(...vals.map((p) => p[1]));
+    if (max === undefined) max = Math.max(...vals.map((p) => p[1]));
+    if (min === max) { min -= 1; max += 1; }
+
+    const t0 = vals[0][0], t1 = vals[vals.length - 1][0];
+    const span = t1 - t0 || 1;
+    const pad = 2.5;   // Platz für die Strichstärke am Rand
+    const x = (t) => ((t - t0) / span) * (w - 2 * pad) + pad;
+    const y = (v) => h - pad - ((v - min) / (max - min)) * (h - 2 * pad);
+
+    const d = vals.map((p, i) => `${i ? 'L' : 'M'}${x(p[0]).toFixed(1)},`
+        + `${y(p[1]).toFixed(1)}`).join('');
+    const area = `M${x(t0).toFixed(1)},${h} ` + d.slice(1)
+        + `L${x(t1).toFixed(1)},${h}Z`;
+    const last = vals[vals.length - 1];
+
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"
+        preserveAspectRatio="none" role="img"
+        aria-label="${escapeHtml(opts.label || 'Verlauf')}">
+        <path d="${area}" fill="${color}" opacity="0.10"/>
+        <path d="${d}" fill="none" stroke="${color}" stroke-width="1.6"
+              stroke-linejoin="round" stroke-linecap="round"/>
+        <circle cx="${x(last[0]).toFixed(1)}" cy="${y(last[1]).toFixed(1)}" r="2.2"
+                fill="${color}"/>
+      </svg>`;
+}
+
+/* Waagerechter Füllstandsbalken mit Schwellenfärbung. */
+export function meter(pct, opts = {}) {
+    if (pct === null || pct === undefined || Number.isNaN(pct)) {
+        return `<span class="meter"><i style="width:0"></i></span>`;
+    }
+    const v = Math.max(0, Math.min(100, pct));
+    const warn = opts.warn ?? 92;
+    const crit = opts.crit ?? 98;
+    const level = v >= crit ? 'critical' : v >= warn ? 'warning' : '';
+    return `<span class="meter" title="${v.toFixed(1)} %">`
+        + `<i class="${level}" style="width:${v.toFixed(1)}%"></i></span>`;
+}

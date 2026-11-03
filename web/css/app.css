@@ -351,6 +351,151 @@ table.data code { font-family: var(--mono); font-size: 11.5px; }
 .minibar > i.warning { background: var(--st-warning); }
 .minibar > i.critical { background: var(--st-critical); }
 
+/* ------------------------------------------------------- Maschinen-Karten */
+
+/* Die Übersicht gruppiert nach Maschine statt nach Metrik. Wer ein Problem
+   sucht, denkt in "welcher Rechner", nicht in "welche Spalte". */
+
+.machine {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+.machine.alert { border-color: var(--st-critical); }
+.machine.warn { border-color: var(--st-warning); }
+.machine.offline { opacity: 0.72; }
+
+.machine-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--grid);
+    flex-wrap: wrap;
+}
+.machine-head .name {
+    font-size: 14px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+}
+.machine-head .host {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+.machine-head .spacer { flex: 1; }
+
+.machine-body { padding: 4px 14px 12px; }
+
+/* Eine Zeile je GPU: Name, Temperatur, Speicher, Verlauf + Zustand.
+   Die letzte Spalte hat eine feste Breite, sonst drückt sie der Rest aus dem
+   Bild und die Sparkline wird abgeschnitten. */
+.gpu-row {
+    display: grid;
+    grid-template-columns: minmax(84px, 0.9fr) minmax(104px, 1.1fr)
+                           minmax(104px, 1.2fr) 96px;
+    gap: 8px 12px;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--grid);
+}
+.gpu-row:last-child { border-bottom: none; }
+.gpu-row .gname { min-width: 0; }
+.gpu-row .gname b { font-size: 12.5px; font-weight: 600; display: block; }
+.gpu-row .gname span {
+    font-size: 11px; color: var(--text-muted);
+    display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gpu-row .cell { min-width: 0; }
+.gpu-row .cell .k {
+    font-size: 10.5px; color: var(--text-muted); display: block;
+    margin-bottom: 2px;
+}
+.gpu-row .cell .v {
+    font-size: 12.5px; font-variant-numeric: tabular-nums; font-weight: 600;
+    white-space: nowrap;
+}
+.gpu-row .cell .v small {
+    font-weight: 400; color: var(--text-secondary); font-size: 11px;
+}
+.gpu-row .trail {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    overflow: hidden;
+}
+.gpu-row .trail .status { font-size: 11px; }
+
+@media (max-width: 560px) {
+    /* Auf schmalen Karten lieber zweizeilig als beschnitten. */
+    .gpu-row { grid-template-columns: 1fr 1fr; }
+    .gpu-row .trail { flex-direction: row; justify-content: flex-start; gap: 8px; }
+}
+
+.meter {
+    position: relative; display: block; height: 5px; margin-top: 4px;
+    background: var(--grid); border-radius: 3px; overflow: hidden;
+}
+.meter > i {
+    position: absolute; inset: 0 auto 0 0;
+    background: var(--series-1); border-radius: 3px;
+}
+.meter > i.warning { background: var(--st-warning); }
+.meter > i.critical { background: var(--st-critical); }
+
+svg.spark { display: block; }
+
+/* Zugang: ein kopierbarer Befehl, nicht nur eine IP zum Abtippen. */
+.sshline {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11.5px;
+    background: var(--page); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 2px 4px 2px 8px;
+    color: var(--text-secondary);
+}
+.sshline button {
+    appearance: none; border: none; background: transparent; cursor: pointer;
+    font: inherit; font-size: 11px; color: var(--text-muted);
+    padding: 2px 5px; border-radius: 4px;
+}
+.sshline button:hover { background: var(--surface-1); color: var(--text-primary); }
+
+/* Dienste einer Maschine als kleine Marken. */
+.svc-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 2px 0 8px; }
+.svc-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--text-secondary);
+    white-space: nowrap;
+}
+.svc-chip .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.svc-chip.down { border-color: var(--st-critical); color: var(--st-critical); }
+
+/* Kompakte Kennzahlenreihe im Kopf einer Maschine. */
+.facts { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.facts .fact { font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; }
+.facts .fact b {
+    color: var(--text-primary); font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+/* Abschnittsüberschrift zwischen den Kartengruppen. */
+.section-head {
+    display: flex; align-items: baseline; gap: 10px;
+    margin: 22px 0 10px;
+}
+.section-head h2 {
+    margin: 0; font-size: 13px; font-weight: 650; letter-spacing: 0.01em;
+    text-transform: uppercase; color: var(--text-secondary);
+}
+.section-head .hint { font-size: 11.5px; color: var(--text-muted); }
+.section-head:first-child { margin-top: 0; }
+
 /* ----------------------------------------------------------------- Charts */
 
 .chart { position: relative; width: 100%; }
@@ -493,6 +638,16 @@ pre.prompt {
     .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; }
     .tile .value { font-size: 26px; }
     header.topbar { gap: 8px; }
+
+    /* Der Bannertext soll die volle Breite bekommen, statt sich neben der
+       Alarm-Marke in eine Spalte von drei Wörtern zu quetschen. */
+    .banner { flex-wrap: wrap; }
+    .banner > span { flex: 1 1 100%; }
+    .banner .pill { order: 3; }
+
+    .machine-head { gap: 6px; }
+    .facts { gap: 4px 10px; }
+    .gpu-row .cell .v small { display: block; margin-top: 1px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

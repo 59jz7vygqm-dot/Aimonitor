@@ -1,4 +1,5 @@
 import { api, fetchPrompt } from '../api.js';
+import { sshCommand, copyText } from './overview.js';
 import { escapeHtml, fmtNum } from '../chart.js';
 import { card, spinner, errorBanner, h, table, statusHtml, sevLevel, sevText,
     fmtDuration, toast } from '../ui.js';
@@ -27,6 +28,11 @@ export async function render(root, state) {
 
     const open = inc.filter((i) => !i.ended_at);
     const closed = inc.filter((i) => i.ended_at);
+
+    // ------------------------------------------------------- Zugang & Alarm
+    // Steht bewusst oben: wer einen Bericht erzeugt, will sich meist gleich
+    // danach auf die betroffene Maschine aufschalten.
+    root.appendChild(await accessPanel());
 
     // ---------------------------------------------------- Prompt-Generator
     const gen = h(`<section class="card">
@@ -277,4 +283,73 @@ function fmtContext(ctx) {
         else parts.push(`${k}: ${v}`);
     }
     return parts.join('\n');
+}
+
+
+/* Zugang zu den Maschinen und Zustand der Benachrichtigungen. */
+async function accessPanel() {
+    let ov, alerts;
+    try {
+        [ov, alerts] = await Promise.all([
+            api.overview(),
+            api.alerts().catch(() => null),
+        ]);
+    } catch {
+        return h('<div></div>');
+    }
+
+    const nodes = ov.nodes?.detail || [];
+    const svcByNode = ov.services_by_node || {};
+    const rows = nodes.map((n) => {
+        const cmd = sshCommand(n);
+        const l = n.labels || {};
+        const extra = (l.ips || '').split(',').filter(
+            (x) => x && x !== l.ip);
+        const svcs = (svcByNode[n.name] || []);
+        return `<tr>
+          <td><code>${escapeHtml(n.name)}</code>${n.hostname && n.hostname !== n.name
+            ? `<div class="source-note">${escapeHtml(n.hostname)}</div>` : ''}</td>
+          <td>${n.age_s <= 90
+            ? statusHtml('good', 'online')
+            : statusHtml(n.age_s > 600 ? 'critical' : 'warning',
+                `stumm ${fmtDuration(n.age_s)}`)}</td>
+          <td>${cmd
+            ? `<span class="sshline"><span>${escapeHtml(cmd)}</span>
+                 <button type="button" data-ssh="${escapeHtml(cmd)}">kopieren</button>
+               </span>`
+            : '<span style="color:var(--text-muted)">keine Adresse gemeldet</span>'}
+          </td>
+          <td>${extra.length
+            ? `<code style="color:var(--text-muted)">${escapeHtml(
+                extra.join(' '))}</code>` : '—'}</td>
+          <td>${svcs.length
+            ? svcs.map((x) => `<code>${escapeHtml(x.key)}</code>`).join('<br>')
+            : '—'}</td>
+        </tr>`;
+    }).join('');
+
+    const alertLine = alerts && alerts.enabled
+        ? `${statusHtml('good', 'Benachrichtigung aktiv')}
+           <span>über ${escapeHtml(alerts.channels.join(', '))}, ab Schwere
+           <code>${escapeHtml(alerts.min_severity)}</code> und erst nach
+           ${alerts.min_duration_s} s. ${alerts.sent_last_hour} in der letzten
+           Stunde verschickt.</span>`
+        : `${statusHtml('muted', 'Benachrichtigung aus')}
+           <span>Einzurichten in <code>deploy/.env</code>
+           (<code>AIMON_ALERT_WEBHOOK_URL</code> oder SMTP). Ohne das meldet sich
+           aimonitor nie von selbst.</span>`;
+
+    const c = card('Maschinen und Zugang',
+        'Damit du dich aufschalten kannst, ohne erst nachzuschlagen.',
+        `<div class="table-wrap"><table class="data">
+           <thead><tr><th>Maschine</th><th>Zustand</th><th>SSH</th>
+             <th>weitere Adressen</th><th>Dienste</th></tr></thead>
+           <tbody>${rows || '<tr><td colspan="5" class="empty">Keine Maschinen.</td></tr>'}
+           </tbody></table></div>
+         <div class="banner" style="margin:12px 0 0">${alertLine}</div>`);
+
+    c.querySelectorAll('[data-ssh]').forEach((b) => {
+        b.addEventListener('click', () => copyText(b.dataset.ssh));
+    });
+    return c;
 }

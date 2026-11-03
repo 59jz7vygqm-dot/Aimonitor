@@ -429,3 +429,65 @@ async def test_bericht_mit_platzhaltern_zeigt_keinen_zugang(client):
     assert "10.0.0.5" not in d["prompt"]
     assert "kvkh" not in d["prompt"]
     assert "Zugang" not in d["prompt"]
+
+
+async def test_overview_kennzeichnet_speicherart(client):
+    """Fehlender VRAM muss erklärt sein, nicht nur leer."""
+    await client.post("/api/v1/ingest/batch", json={
+        "node": {"name": "ki"},
+        "samples": [
+            # Karte mit eigenem VRAM
+            {"metric": "gpu.mem_total_bytes", "value": 24e9, "ts": ts(),
+             "labels": {"gpu": "0"}},
+            {"metric": "gpu.mem_used_bytes", "value": 12e9, "ts": ts(),
+             "labels": {"gpu": "0"}},
+            {"metric": "gpu.temp_c", "value": 60, "ts": ts(), "labels": {"gpu": "0"}},
+            # Gemeinsamer Speicher
+            {"metric": "gpu.mem_total_bytes", "value": 120e9, "ts": ts(),
+             "labels": {"gpu": "1", "memory": "unified"}},
+            {"metric": "gpu.mem_unified", "value": 1, "ts": ts(),
+             "labels": {"gpu": "1"}},
+            {"metric": "gpu.temp_c", "value": 36, "ts": ts(), "labels": {"gpu": "1"}},
+            # Gar keine Angabe
+            {"metric": "gpu.mem_unavailable", "value": 1, "ts": ts(),
+             "labels": {"gpu": "2"}},
+            {"metric": "gpu.temp_c", "value": 34, "ts": ts(), "labels": {"gpu": "2"}},
+        ],
+    })
+    gpus = {g["gpu"]: g for g in (await client.get("/api/v1/overview")).json()["gpus"]}
+    assert gpus["0"]["memory_kind"] == "dedicated"
+    assert gpus["1"]["memory_kind"] == "unified"
+    assert gpus["2"]["memory_kind"] == "unavailable"
+    assert gpus["2"]["mem_total"] is None
+
+
+async def test_overview_liefert_zugangsdaten_und_alarmstatus(client):
+    await client.post("/api/v1/ingest/batch", json={
+        "node": {"name": "ki", "hostname": "ki.lan", "agent_version": "0.1.0",
+                 "labels": {"ip": "10.0.0.5", "ssh_user": "kvkh"}},
+        "samples": [{"metric": "host.cpu_pct", "value": 10, "ts": ts()}],
+    })
+    d = (await client.get("/api/v1/overview")).json()
+    n = d["nodes"]["detail"][0]
+    assert n["labels"]["ip"] == "10.0.0.5"
+    assert n["hostname"] == "ki.lan"
+    assert "alerts" in d
+    # Ohne konfigurierten Kanal ist Alerting aus – und sagt das auch.
+    assert d["alerts"]["enabled"] is False
+
+
+async def test_overview_gruppiert_dienste_nach_maschine(client):
+    await client.post("/api/v1/ingest/batch", json={
+        "node": {"name": "ki"},
+        "services": [
+            {"key": "vllm@ki:8000", "kind": "vllm", "version": "0.8.5",
+             "labels": {"model": "Qwen3-32B-AWQ"}},
+            {"key": "ollama@ki:11434", "kind": "ollama"},
+        ],
+        "samples": [{"metric": "host.cpu_pct", "value": 10, "ts": ts()}],
+    })
+    d = (await client.get("/api/v1/overview")).json()
+    svcs = {s["kind"]: s for s in d["services_by_node"]["ki"]}
+    assert svcs["vllm"]["model"] == "Qwen3-32B-AWQ"
+    assert svcs["vllm"]["status"] == "online"
+    assert svcs["ollama"]["model"] is None

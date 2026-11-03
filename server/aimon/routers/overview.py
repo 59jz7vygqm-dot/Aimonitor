@@ -13,6 +13,39 @@ from ..tsdb import query as q
 router = APIRouter(prefix="/api/v1", tags=["overview"])
 
 
+def _services_by_node(rows) -> dict[str, list[dict]]:
+    """Dienste nach Maschine, damit die Übersicht sie an der Karte zeigen kann."""
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        node = r["node"] or "unbekannt"
+        out.setdefault(node, []).append({
+            "key": r["key"],
+            "kind": r["kind"],
+            "name": r["name"],
+            "version": r["version"],
+            "base_url": r["base_url"],
+            # Das Modell ist die Information, die man bei vLLM wirklich sucht.
+            "model": (r["labels"] or {}).get("model"),
+            "status": ("online" if r["age_s"] <= settings.stale_after_s
+                       else "stale" if r["age_s"] <= settings.stale_after_s * 10
+                       else "offline"),
+            "age_s": r["age_s"],
+        })
+    return out
+
+
+def _notify_enabled() -> bool:
+    from ..diagnostics import notify
+
+    return notify.enabled()
+
+
+def _notify_channels() -> list[str]:
+    from ..diagnostics import notify
+
+    return notify.channels()
+
+
 async def _gpu_rows(conn) -> list[dict]:
     rows = await conn.fetch(
         """
@@ -38,7 +71,9 @@ async def _gpu_rows(conn) -> list[dict]:
                max(value) FILTER (WHERE metric='gpu.clock_sm_mhz')    AS clock_sm_mhz,
                max(value) FILTER (WHERE metric='gpu.throttle_thermal') AS throttle_thermal,
                max(value) FILTER (WHERE metric='gpu.throttle_power')   AS throttle_power,
-               max(value) FILTER (WHERE metric='gpu.throttle_hw')      AS throttle_hw
+               max(value) FILTER (WHERE metric='gpu.throttle_hw')      AS throttle_hw,
+               max(value) FILTER (WHERE metric='gpu.mem_unified')      AS mem_unified,
+               max(value) FILTER (WHERE metric='gpu.mem_unavailable')  AS mem_unavailable
         FROM g WHERE labels ? 'gpu'
         GROUP BY node, labels->>'gpu'
         ORDER BY node, (labels->>'gpu')::int
@@ -54,6 +89,12 @@ async def _gpu_rows(conn) -> list[dict]:
             d["mem_pct"] = None
         d["age_s"] = (now - r["ts"]).total_seconds() if r["ts"] else None
         d["fresh"] = (d["age_s"] is not None and d["age_s"] <= settings.stale_after_s)
+        # Warum fehlt der Speicher: gemeinsamer Speicher oder gar keine Angabe.
+        d["memory_kind"] = (
+            "unified" if (r["mem_unified"] or 0) > 0
+            else "unavailable" if (r["mem_unavailable"] or 0) > 0
+            else "dedicated"
+        )
         out.append(d)
     return out
 
@@ -67,9 +108,11 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
     async with pool().acquire() as conn:
         node_rows = await conn.fetch(
             """
-            SELECT name, last_seen,
-                   extract(epoch FROM (now() - last_seen))::float8 AS age_s
-            FROM nodes ORDER BY name
+            SELECT n.name, n.hostname, n.agent_version, n.labels, n.last_seen,
+                   extract(epoch FROM (now() - n.last_seen))::float8 AS age_s,
+                   (SELECT count(*) FROM services s WHERE s.node_id = n.id)
+                       AS service_count
+            FROM nodes n ORDER BY n.name
             """
         )
         svc_rows = await conn.fetch(
@@ -80,6 +123,15 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
             FROM services GROUP BY kind ORDER BY kind
             """,
             settings.stale_after_s,
+        )
+        svc_detail = await conn.fetch(
+            """
+            SELECT s.key, s.kind, s.name, s.version, s.base_url, s.labels,
+                   n.name AS node,
+                   extract(epoch FROM (now() - s.last_seen))::float8 AS age_s
+            FROM services s LEFT JOIN nodes n ON n.id = s.node_id
+            ORDER BY n.name, s.kind, s.key
+            """
         )
         gpus = await _gpu_rows(conn)
 
@@ -148,6 +200,10 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
             """,
             h1,
         )
+        alerts_hour = await conn.fetchval(
+            "SELECT count(*) FROM alert_log WHERE ok "
+            "AND sent_at > now() - INTERVAL '1 hour'"
+        )
         probe_health = await conn.fetchrow(
             """
             SELECT count(*) AS n, count(*) FILTER (WHERE ok) AS ok
@@ -174,6 +230,7 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
             "detail": [dict(r) for r in node_rows],
         },
         "services": [dict(r) for r in svc_rows],
+        "services_by_node": _services_by_node(svc_detail),
         "gpus": gpus,
         "gpu_summary": {
             "count": len(gpus),
@@ -209,6 +266,12 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
         "comfyui": pack(comfy),
         "incidents_open": {r["severity"]: r["n"] for r in inc},
         "events_1h": {r["severity"]: r["n"] for r in ev},
+        "alerts": {
+            "enabled": _notify_enabled(),
+            "channels": _notify_channels(),
+            "min_severity": settings.alert_min_severity,
+            "sent_last_hour": alerts_hour or 0,
+        },
         "probes_5m": {
             "total": probe_health["n"] if probe_health else 0,
             "ok": probe_health["ok"] if probe_health else 0,
