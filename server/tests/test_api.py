@@ -431,6 +431,28 @@ async def test_bericht_mit_platzhaltern_zeigt_keinen_zugang(client):
     assert "Zugang" not in d["prompt"]
 
 
+async def test_overview_kennzeichnet_host_speicher(client):
+    """Auf Grace-Blackwell-Systemen meldet der Agent den Arbeitsspeicher des
+    Hosts als GPU-Speicher. Die Herkunft muss bis in die UI durchkommen –
+    sonst sähe es aus wie eine Karte mit 120 GB VRAM."""
+    await client.post("/api/v1/ingest/batch", json={
+        "node": {"name": "spark01"},
+        "samples": [
+            {"metric": "gpu.mem_total_bytes", "value": 128e9, "ts": ts(),
+             "labels": {"gpu": "0", "memory": "host"}},
+            {"metric": "gpu.mem_used_bytes", "value": 9e9, "ts": ts(),
+             "labels": {"gpu": "0", "memory": "host"}},
+            {"metric": "gpu.mem_unified", "value": 1, "ts": ts(),
+             "labels": {"gpu": "0"}},
+            {"metric": "gpu.temp_c", "value": 36, "ts": ts(), "labels": {"gpu": "0"}},
+        ],
+    })
+    g = (await client.get("/api/v1/overview")).json()["gpus"][0]
+    assert g["memory_kind"] == "host"
+    assert g["mem_total"] == 128e9
+    assert g["mem_pct"] == pytest.approx(7.03, abs=0.1)
+
+
 async def test_overview_kennzeichnet_speicherart(client):
     """Fehlender VRAM muss erklärt sein, nicht nur leer."""
     await client.post("/api/v1/ingest/batch", json={

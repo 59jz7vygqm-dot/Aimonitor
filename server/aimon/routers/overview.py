@@ -73,7 +73,9 @@ async def _gpu_rows(conn) -> list[dict]:
                max(value) FILTER (WHERE metric='gpu.throttle_power')   AS throttle_power,
                max(value) FILTER (WHERE metric='gpu.throttle_hw')      AS throttle_hw,
                max(value) FILTER (WHERE metric='gpu.mem_unified')      AS mem_unified,
-               max(value) FILTER (WHERE metric='gpu.mem_unavailable')  AS mem_unavailable
+               max(value) FILTER (WHERE metric='gpu.mem_unavailable')  AS mem_unavailable,
+               max(labels->>'memory') FILTER (WHERE metric='gpu.mem_total_bytes')
+                   AS mem_source
         FROM g WHERE labels ? 'gpu'
         GROUP BY node, labels->>'gpu'
         ORDER BY node, (labels->>'gpu')::int
@@ -90,8 +92,13 @@ async def _gpu_rows(conn) -> list[dict]:
         d["age_s"] = (now - r["ts"]).total_seconds() if r["ts"] else None
         d["fresh"] = (d["age_s"] is not None and d["age_s"] <= settings.stale_after_s)
         # Warum fehlt der Speicher: gemeinsamer Speicher oder gar keine Angabe.
+        # Woher der Speicherwert stammt. Das steht im Label der Serie, weil
+        # "90 % belegt" bei eigenem VRAM etwas anderes heißt als beim
+        # Arbeitsspeicher eines Hosts, den sich CPU und GPU teilen.
+        src = (r["mem_source"] or "")
         d["memory_kind"] = (
-            "unified" if (r["mem_unified"] or 0) > 0
+            "host" if src == "host"
+            else "unified" if (r["mem_unified"] or 0) > 0
             else "unavailable" if (r["mem_unavailable"] or 0) > 0
             else "dedicated"
         )

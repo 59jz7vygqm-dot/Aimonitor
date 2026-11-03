@@ -183,6 +183,8 @@ func setField(c *Config, key, val string) error {
 		c.SSHUser = val
 	case "ssh_port":
 		c.SSHPort = val
+	case "unified_memory":
+		c.UnifiedMemory = val
 	case "tap_listen":
 		c.TapListen = val
 	case "tap_upstream":

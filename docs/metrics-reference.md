@@ -13,6 +13,8 @@ die aus Lesbarkeitsgründen `_ms` sind, und Temperaturen in `_c`.
 | `gpu.mem_used_bytes` | Bytes | `memory.used` |
 | `gpu.mem_total_bytes` | Bytes | `memory.total` |
 | `gpu.mem_reserved_bytes` | Bytes | `memory.reserved` |
+| `gpu.mem_unified` | 0/1 | GPU teilt den Speicher mit dem Host |
+| `gpu.mem_unavailable` | 0/1 | Treiber meldet keinen Speicher und es ist kein geteiltes System |
 | `gpu.temp_c` | °C | `temperature.gpu` |
 | `gpu.temp_mem_c` | °C | `temperature.memory` (nur HBM-Karten) |
 | `gpu.power_w` | W | `power.draw` |
@@ -28,6 +30,32 @@ die aus Lesbarkeitsgründen `_ms` sind, und Temperaturen in `_c`.
 | `gpu.ecc_errors_total` | Count | `ecc.errors.uncorrected.volatile.total` |
 | `gpu.proc_mem_bytes` | Bytes | `--query-compute-apps`, Label `pid`, `pname` |
 | `gpu.count` | – | Anzahl sichtbarer GPUs auf dem Node |
+
+### Woher der Speicherwert kommt
+
+Das Label `memory` an `gpu.mem_total_bytes` und `gpu.mem_used_bytes` sagt es:
+
+| `memory` | Bedeutung |
+|---|---|
+| (kein Label) | Eigener VRAM, direkt von `--query-gpu` |
+| `unified` | Aus `nvidia-smi -q -d MEMORY`, weil `--query-gpu` nichts lieferte |
+| `host` | Arbeitsspeicher des Hosts – der Treiber meldet gar keinen GPU-Speicher |
+
+Der letzte Fall ist der Normalzustand auf Grace-Blackwell- und
+Tegra-Plattformen (DGX Spark, Jetson): CPU und GPU teilen sich denselben
+physischen Speicher, es gibt keinen eigenen VRAM-Pool, über den der Treiber
+berichten könnte. Gemessen wurde hier `/proc/meminfo` — die Zahl ist echt, nur
+beschreibt sie den gemeinsamen Speicher. Wer dort ein Modell lädt, belegt
+genau den.
+
+Die Erkennung läuft über das GPU-Modell, `/etc/nv_tegra_release` und den
+Device-Tree. Liegt sie daneben, lässt sie sich in `/etc/aimon/agent.yaml`
+überschreiben (`unified_memory: true` oder `false`). `aimon-agent gpudump`
+zeigt, was erkannt wurde und warum.
+
+Summen über `gpu.mem_total_bytes` müssen nach `memory` trennen: den
+Arbeitsspeicher eines Hosts mit mehreren GPUs mitzuzählen ergäbe sonst ein
+Vielfaches des tatsächlich vorhandenen Speichers.
 
 ## `host.*`
 

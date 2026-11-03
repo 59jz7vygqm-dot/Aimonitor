@@ -119,7 +119,9 @@ func runAgent() {
 
 	var fast []collectorIface
 	if c.GPUEnabled {
-		fast = append(fast, collector.NewGPUCollector())
+		gpu := collector.NewGPUCollector()
+		gpu.UnifiedOverride = c.UnifiedMemory
+		fast = append(fast, gpu)
 	}
 	if c.HostEnabled {
 		fast = append(fast, collector.NewHostCollector())
@@ -404,8 +406,12 @@ func runCheck() {
 
 	fmt.Printf("\nGPU-Collector …\n")
 	g := collector.NewGPUCollector()
+	g.UnifiedOverride = c.UnifiedMemory
 	gb, _ := g.Collect(ctx, float64(time.Now().Unix()))
 	fmt.Printf("  %d Samples (nvidia-smi: %s)\n", len(gb.Samples), g.Binary)
+	for _, e := range gb.Events {
+		fmt.Printf("  Hinweis: %s\n", e.Title)
+	}
 
 	fmt.Printf("\nHost-Collector …\n")
 	h := collector.NewHostCollector()
@@ -486,6 +492,9 @@ func runGPUDump() {
 	defer cancel()
 
 	g := collector.NewGPUCollector()
+	if c, err := config.Load(envOr("AIMON_CONFIG", "/etc/aimon/agent.yaml")); err == nil {
+		g.UnifiedOverride = c.UnifiedMemory
+	}
 	fmt.Printf("nvidia-smi: %s\n\n", g.Binary)
 
 	fmt.Println("=== 1. --query-gpu (der übliche Weg) ===")
@@ -515,7 +524,26 @@ func runGPUDump() {
 		}
 	}
 
-	fmt.Println("\n=== 3. Was der Agent daraus an Messwerten schickt ===")
+	fmt.Println("\n=== 3. Gemeinsamer Speicher? ===")
+	names := []string{}
+	for _, line := range strings.Split(q, "\n") {
+		parts := strings.Split(line, ",")
+		if len(parts) > 2 {
+			names = append(names, strings.TrimSpace(parts[2]))
+		}
+	}
+	if u, reason := collector.DetectUnifiedMemory(names); u {
+		fmt.Printf("  ja – erkannt an: %s\n", reason)
+		if t, used, ok := collector.HostMemory(); ok {
+			fmt.Printf("  Host-Speicher: %.1f GiB belegt von %.1f GiB "+
+				"(wird als GPU-Speicher gemeldet, Label memory=host)\n",
+				used/(1<<30), t/(1<<30))
+		}
+	} else {
+		fmt.Println("  nein – ein fehlender Speicherwert wäre hier ein Defekt")
+	}
+
+	fmt.Println("\n=== 4. Was der Agent daraus an Messwerten schickt ===")
 	b, err := g.Collect(ctx, float64(time.Now().Unix()))
 	if err != nil {
 		fmt.Printf("FEHLER: %v\n", err)

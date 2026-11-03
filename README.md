@@ -317,21 +317,31 @@ Agent noch sendet: `curl -s localhost:9100/healthz` auf der GPU-VM. Steigt
 
 ### GPU ohne Speicherangabe
 
-Auf Systemen mit gemeinsamem Speicher (Grace Blackwell / DGX Spark) liefert
-`nvidia-smi --query-gpu=memory.total` ein `N/A`. Der Agent fällt dann auf
-`nvidia-smi -q -d MEMORY` zurück und kennzeichnet die Werte als `unified` —
-„frei" bedeutet dort etwas anderes als bei einer Karte mit eigenem VRAM.
+Auf Grace-Blackwell- und Tegra-Plattformen (DGX Spark, Jetson) meldet
+`nvidia-smi` **gar keinen** GPU-Speicher — weder über `--query-gpu` noch über
+`nvidia-smi -q -d MEMORY`. Das ist kein Defekt: CPU und GPU teilen sich
+denselben physischen Speicher, es gibt keinen eigenen VRAM-Pool.
 
-Bleibt die Anzeige leer, zeigt dieser Befehl auf der betroffenen Maschine
-Rohausgabe und Auswertung nebeneinander:
+Der Agent erkennt solche Systeme und meldet stattdessen den Arbeitsspeicher
+des Hosts, gekennzeichnet mit `memory=host`. Im Dashboard steht dann
+„Speicher (mit Host geteilt)". Das ist die Zahl, auf die es ankommt: wer dort
+ein Modell lädt, belegt genau den.
+
+Liegt die Erkennung daneben, in `/etc/aimon/agent.yaml`:
+
+```yaml
+unified_memory: true    # oder false
+```
+
+Was erkannt wurde und warum, zeigt:
 
 ```bash
 aimon-agent gpudump
 ```
 
-Erkennt der Agent dort nichts, ist die Ausgabe das, was ich brauche, um den
-Parser anzupassen. Bei gemeinsamem Speicher ist ohnehin der Arbeitsspeicher
-des Hosts die eigentliche Grenze — siehe `host.mem_used_bytes` im Explorer.
+Bei einer gewöhnlichen Karte **ohne** gemeinsamen Speicher ist ein fehlender
+Wert dagegen ein echtes Problem — dann meldet der Agent eine Warnung. Meist
+fehlen Rechte: läuft der Agent als root?
 
 ### „GPU meldet Power-Limit bei nur 0 % Last“
 

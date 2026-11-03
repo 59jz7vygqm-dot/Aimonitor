@@ -47,6 +47,15 @@ type GPUCollector struct {
 	// memWarned verhindert, dass dieselbe Erklärung bei jedem Scrape erneut
 	// als Ereignis geschickt wird.
 	memWarned bool
+
+	// Gemeinsamer Speicher zwischen CPU und GPU. Einmal erkannt, nicht bei
+	// jedem Scrape erneut geprüft - die Hardware ändert sich nicht.
+	unified       bool
+	unifiedReason string
+	unifiedKnown  bool
+	// UnifiedOverride: "auto" (Default), "true" oder "false" aus der
+	// Konfiguration, falls die Erkennung danebenliegt.
+	UnifiedOverride string
 }
 
 func NewGPUCollector() *GPUCollector {
@@ -105,11 +114,16 @@ func (g *GPUCollector) Collect(ctx context.Context, now float64) (model.Batch, e
 	// Grace-Blackwell-Systemen), die ausführliche Ausgabe nachladen. Einmal
 	// pro Scrape, nicht pro GPU.
 	var memFallback map[int]GPUMemory
+	needFallback := false
 	for _, row := range rows {
 		if len(row) >= len(gpuQueryFields) && !valid(row[5]) { // memory.total
-			memFallback = g.queryMemory(ctx)
+			needFallback = true
 			break
 		}
+	}
+	if needFallback {
+		memFallback = g.queryMemory(ctx)
+		g.detectUnified(rows)
 	}
 
 	count := 0
@@ -179,10 +193,58 @@ func (g *GPUCollector) Collect(ctx context.Context, now float64) (model.Batch, e
 				model.Sample{Metric: "gpu.mem_unified", Value: 1, TS: now,
 					Labels: lbl},
 			)
+		} else if g.unified {
+			// Gemeinsamer Speicher: der Treiber hat nichts zu melden, weil es
+			// keinen eigenen VRAM-Pool gibt. Die Zahl, auf die es ankommt, ist
+			// der Arbeitsspeicher des Hosts - wer dort ein Modell lädt, belegt
+			// genau den. Das Label sagt ausdrücklich, woher der Wert stammt;
+			// als VRAM auszugeben wäre eine falsche Behauptung.
+			if total, used, ok := HostMemory(); ok {
+				hlbl := map[string]string{}
+				for k, v := range lbl {
+					hlbl[k] = v
+				}
+				hlbl["memory"] = "host"
+				b.Samples = append(b.Samples,
+					model.Sample{Metric: "gpu.mem_total_bytes", Value: total,
+						TS: now, Labels: hlbl},
+					model.Sample{Metric: "gpu.mem_used_bytes", Value: used,
+						TS: now, Labels: hlbl},
+					model.Sample{Metric: "gpu.mem_unified", Value: 1, TS: now,
+						Labels: lbl},
+				)
+			} else {
+				b.Samples = append(b.Samples,
+					model.Sample{Metric: "gpu.mem_unavailable", Value: 1, TS: now,
+						Labels: lbl},
+				)
+			}
+			if !g.memWarned {
+				g.memWarned = true
+				b.Events = append(b.Events, model.Event{
+					Kind:     "gpu.memory_shared",
+					Severity: "info",
+					Title:    "GPU teilt sich den Speicher mit dem Host",
+					TS:       now,
+					Detail: map[string]any{
+						"gpu":        idx,
+						"name":       f["name"],
+						"erkannt_an": g.unifiedReason,
+						"bedeutung": "Der Treiber meldet keinen eigenen " +
+							"GPU-Speicher, weil es keinen gibt - CPU und GPU " +
+							"teilen sich denselben physischen Speicher. Als " +
+							"Speicherwert wird deshalb der Arbeitsspeicher des " +
+							"Hosts gemeldet (Label memory=host); das ist die " +
+							"tatsächliche Grenze für Modelle.",
+					},
+					DedupKey: "gpu.memory_shared:" + idx,
+				})
+			}
 		} else {
-			// Keine der beiden Quellen liefert etwas. Das ausdrücklich
-			// melden, statt stillschweigend eine Lücke zu lassen - sonst
-			// sieht es im Dashboard aus wie ein Ausfall des Agents.
+			// Gewöhnliche Karte ohne Speicherangabe: das ist kein Normalfall,
+			// sondern ein Defekt oder eine Rechtefrage. Ausdrücklich melden,
+			// statt stillschweigend eine Lücke zu lassen - sonst sieht es im
+			// Dashboard aus wie ein Ausfall des Agents.
 			b.Samples = append(b.Samples,
 				model.Sample{Metric: "gpu.mem_unavailable", Value: 1, TS: now,
 					Labels: lbl},
@@ -191,17 +253,17 @@ func (g *GPUCollector) Collect(ctx context.Context, now float64) (model.Batch, e
 				g.memWarned = true
 				b.Events = append(b.Events, model.Event{
 					Kind:     "gpu.memory_unavailable",
-					Severity: "info",
+					Severity: "warning",
 					Title:    "Der Treiber meldet für diese GPU keinen Speicher",
 					TS:       now,
 					Detail: map[string]any{
 						"gpu":  idx,
 						"name": f["name"],
 						"hinweis": "Weder --query-gpu=memory.total noch " +
-							"'nvidia-smi -q -d MEMORY' liefern Zahlen. Auf Systemen " +
-							"mit gemeinsamem Speicher ist der Arbeitsspeicher des " +
-							"Hosts die eigentliche Grenze - siehe host.mem_used_bytes. " +
-							"Rohausgabe zum Nachreichen: 'aimon-agent gpudump'.",
+							"'nvidia-smi -q -d MEMORY' liefern Zahlen, und die " +
+							"Karte wurde nicht als System mit gemeinsamem " +
+							"Speicher erkannt. Rechte prüfen (läuft der Agent " +
+							"als root?) und 'aimon-agent gpudump' ansehen.",
 					},
 					DedupKey: "gpu.memory_unavailable:" + idx,
 				})
@@ -356,4 +418,29 @@ func GPUQueryArgs() []string {
 		"--query-gpu=" + strings.Join(gpuQueryFields, ","),
 		"--format=csv,noheader,nounits",
 	}
+}
+
+// detectUnified stellt einmalig fest, ob CPU und GPU sich den Speicher teilen.
+func (g *GPUCollector) detectUnified(rows [][]string) {
+	if g.unifiedKnown {
+		return
+	}
+	g.unifiedKnown = true
+
+	switch strings.ToLower(strings.TrimSpace(g.UnifiedOverride)) {
+	case "true", "yes", "1":
+		g.unified, g.unifiedReason = true, "in der Konfiguration gesetzt"
+		return
+	case "false", "no", "0":
+		g.unified, g.unifiedReason = false, ""
+		return
+	}
+
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if len(row) > 2 {
+			names = append(names, strings.TrimSpace(row[2]))
+		}
+	}
+	g.unified, g.unifiedReason = DetectUnifiedMemory(names)
 }

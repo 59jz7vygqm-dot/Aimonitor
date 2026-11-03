@@ -139,17 +139,23 @@ function summaryTiles(ov, open) {
         (nodes.stale || []).length ? `stumm: ${nodes.stale.join(', ')}` : 'alle melden',
         (nodes.stale || []).length ? '' : 'good'));
 
-    // VRAM nur über die Karten summieren, die überhaupt welchen melden -
-    // sonst wäre der Prozentsatz still falsch.
-    const withMem = gpus.filter((x) => x.mem_total);
+    // Nur eigener VRAM wird summiert. Den Arbeitsspeicher geteilter Systeme
+    // mitzuzählen ergäbe eine Zahl, die nichts bedeutet - und bei mehreren
+    // GPUs auf einem Host würde er mehrfach gezählt.
+    const withMem = gpus.filter((x) => x.mem_total && x.memory_kind === 'dedicated');
+    const shared = gpus.filter((x) => x.memory_kind === 'host'
+        || x.memory_kind === 'unified');
     const used = withMem.reduce((a, x) => a + (x.mem_used || 0), 0);
     const total = withMem.reduce((a, x) => a + (x.mem_total || 0), 0);
-    const missing = gpus.length - withMem.length;
+    const missing = gpus.length - withMem.length - shared.length;
+    const parts = [];
+    if (total) parts.push(`${fmtBytes(used)} / ${fmtBytes(total)} VRAM`);
+    if (shared.length) {
+        parts.push(`${shared.length} mit geteiltem Speicher`);
+    }
+    if (missing > 0) parts.push(`${missing} ohne Angabe`);
     t.appendChild(tile('GPUs', `${gpus.length}`,
-        total
-            ? `${fmtBytes(used)} / ${fmtBytes(total)}` +
-              (missing ? ` · ${missing} ohne Speicherangabe` : '')
-            : 'keine Speicherangaben'));
+        parts.join(' · ') || 'keine Speicherangaben'));
 
     t.appendChild(tile('Höchste GPU-Temperatur',
         g.max_temp_c != null ? `${g.max_temp_c.toFixed(0)}<span class="unit"> °C</span>`
@@ -309,11 +315,20 @@ function gpuRow(g, trends) {
     // ein Ausfall des Agents, ist aber bei gemeinsamem Speicher der Normalfall.
     let memHtml;
     if (g.mem_total) {
-        const unified = g.memory_kind === 'unified';
-        memHtml = `<span class="k">${unified ? 'Speicher (gemeinsam)' : 'VRAM'}</span>
+        const shared = g.memory_kind === 'host' || g.memory_kind === 'unified';
+        const label = g.memory_kind === 'host'
+            ? 'Speicher (mit Host geteilt)'
+            : g.memory_kind === 'unified' ? 'Speicher (gemeinsam)' : 'VRAM';
+        const title = g.memory_kind === 'host'
+            ? 'Der Treiber meldet keinen eigenen GPU-Speicher, weil CPU und GPU '
+              + 'sich denselben physischen Speicher teilen. Gezeigt wird der '
+              + 'Arbeitsspeicher des Hosts – das ist die tatsächliche Grenze '
+              + 'für Modelle.'
+            : '';
+        memHtml = `<span class="k" title="${escapeHtml(title)}">${label}</span>
             <span class="v">${fmtNum(g.mem_pct, 0)} <small>%</small>
               <small>${fmtBytes(g.mem_used)} / ${fmtBytes(g.mem_total)}</small></span>
-            ${meter(g.mem_pct, unified ? { warn: 95, crit: 99 } : {})}`;
+            ${meter(g.mem_pct, shared ? { warn: 92, crit: 97 } : {})}`;
     } else if (g.memory_kind === 'unavailable') {
         memHtml = `<span class="k">Speicher</span>
             <span class="v" style="font-weight:400;color:var(--text-muted)"

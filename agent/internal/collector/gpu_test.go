@@ -75,7 +75,33 @@ case "$*" in
 esac
 `
 
-// Gar keine Speicherwerte, auch nicht im Rückfallweg.
+// Echte Ausgabe einer GB10 (DGX Spark, Treiber 580.178.04): ALLE
+// Speicherfelder sind N/A, auch in der ausführlichen Ausgabe. Das ist kein
+// Defekt - es gibt schlicht keinen eigenen VRAM-Pool.
+const gb10SMI = `
+case "$*" in
+  *--query-compute-apps*) exit 0 ;;
+  *"-q -d MEMORY"*)
+    printf '%s\n' \
+      "Attached GPUs                                          : 1" \
+      "GPU 0000000F:01:00.0" \
+      "    FB Memory Usage" \
+      "        Total                                          : N/A" \
+      "        Reserved                                       : N/A" \
+      "        Used                                           : N/A" \
+      "        Free                                           : N/A" \
+      "    BAR1 Memory Usage" \
+      "        Total                                          : N/A" \
+      "    Conf Compute Protected Memory Usage" \
+      "        Total                                          : 0 MiB"
+    ;;
+  *--query-gpu*)
+    echo "0, GPU-f5f21ed2, NVIDIA GB10, 0, 0, [N/A], [N/A], [N/A], 36, N/A, 3.48, [N/A], [N/A], [N/A], 208, [N/A], 3003, Not Active, Not Active, Not Active, Not Active, 1, 1, [N/A], Enabled, Default"
+    ;;
+esac
+`
+
+// Gewöhnliche Karte, aber ohne Speicherwerte: das ist ein Defekt.
 const noMemorySMI = `
 case "$*" in
   *--query-compute-apps*) exit 0 ;;
@@ -87,7 +113,7 @@ case "$*" in
       "        Total                             : N/A"
     ;;
   *--query-gpu*)
-    echo "0, GPU-abc, NVIDIA GB10, 0, [N/A], [N/A], [N/A], [N/A], 36, [N/A], 3.21, 72.00, [N/A], [N/A], 1200, [N/A], [N/A], Not Active, Not Active, Not Active, Active, 5, 8, 0, Enabled, Default"
+    echo "0, GPU-abc, NVIDIA L4, 0, [N/A], [N/A], [N/A], [N/A], 36, [N/A], 3.21, 72.00, [N/A], [N/A], 1200, [N/A], [N/A], Not Active, Not Active, Not Active, Active, 5, 8, 0, Enabled, Default"
     ;;
 esac
 `
@@ -201,5 +227,84 @@ func TestGPUOhneTreiberStillAbschalten(t *testing.T) {
 	// Beim zweiten Mal gar nicht mehr versuchen
 	if !g.absent {
 		t.Error("Collector hätte sich abschalten müssen")
+	}
+}
+
+func TestGB10NutztHostSpeicher(t *testing.T) {
+	m, events := collect(t, fakeSMI(t, gb10SMI))
+
+	total, used, ok := HostMemory()
+	if !ok {
+		t.Skip("/proc/meminfo nicht lesbar")
+	}
+
+	// Der Treiber meldet nichts - gemeldet wird stattdessen der
+	// Arbeitsspeicher des Hosts, weil das die echte Grenze ist.
+	if m["gpu.mem_total_bytes"].Value != total {
+		t.Errorf("mem_total = %v, erwartet Host-Speicher %v",
+			m["gpu.mem_total_bytes"].Value, total)
+	}
+	if d := m["gpu.mem_used_bytes"].Value - used; d > total*0.05 || d < -total*0.05 {
+		t.Errorf("mem_used = %v, erwartet etwa %v",
+			m["gpu.mem_used_bytes"].Value, used)
+	}
+	// Die Herkunft muss am Label stehen. Als VRAM auszugeben wäre falsch.
+	if m["gpu.mem_total_bytes"].Labels["memory"] != "host" {
+		t.Errorf("Label fehlt: %v", m["gpu.mem_total_bytes"].Labels)
+	}
+	if m["gpu.mem_unified"].Value != 1 {
+		t.Error("gpu.mem_unified fehlt")
+	}
+	if _, ok := m["gpu.mem_unavailable"]; ok {
+		t.Error("bei gemeinsamem Speicher ist nichts 'nicht verfügbar'")
+	}
+
+	var kind string
+	for _, k := range events {
+		kind = k
+	}
+	if kind != "gpu.memory_shared" {
+		t.Errorf("erwartet erklärendes Ereignis gpu.memory_shared, bekommen %v",
+			events)
+	}
+
+	// Die übrigen Werte kommen weiter aus --query-gpu
+	if m["gpu.temp_c"].Value != 36 {
+		t.Errorf("temp = %v", m["gpu.temp_c"].Value)
+	}
+	// Kein Leistungslimit gemeldet -> Metrik fehlt, statt 0 zu behaupten
+	if _, ok := m["gpu.power_limit_w"]; ok {
+		t.Error("nicht gemeldetes Leistungslimit hätte wegbleiben müssen")
+	}
+	// Alle Throttle-Gründe "Not Active"
+	if m["gpu.throttle_power"].Value != 0 {
+		t.Errorf("throttle_power = %v", m["gpu.throttle_power"].Value)
+	}
+}
+
+func TestUnifiedErkennungUeberschreibbar(t *testing.T) {
+	// Erkennung abschalten: dann ist der fehlende Speicher wieder ein Defekt.
+	g := NewGPUCollector()
+	g.Binary = fakeSMI(t, gb10SMI)
+	g.UnifiedOverride = "false"
+	b, _ := g.Collect(context.Background(), 1)
+
+	var hasHost, hasUnavailable bool
+	for _, s := range b.Samples {
+		if s.Metric == "gpu.mem_total_bytes" {
+			hasHost = true
+		}
+		if s.Metric == "gpu.mem_unavailable" {
+			hasUnavailable = true
+		}
+	}
+	if hasHost {
+		t.Error("mit unified=false darf kein Host-Speicher gemeldet werden")
+	}
+	if !hasUnavailable {
+		t.Error("stattdessen muss der fehlende Speicher gemeldet werden")
+	}
+	if len(b.Events) == 0 || b.Events[0].Severity != "warning" {
+		t.Errorf("ohne gemeinsamen Speicher ist das eine Warnung: %+v", b.Events)
 	}
 }

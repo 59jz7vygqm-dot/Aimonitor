@@ -49,6 +49,11 @@ type Config struct {
 	// (etwa weil das Dashboard weitergegeben wird), schaltet es hier ab.
 	ReportAddresses bool
 
+	// UnifiedMemory: "auto" (Default), "true" oder "false". Teilen sich CPU
+	// und GPU den Speicher, meldet der Treiber keinen eigenen VRAM; dann wird
+	// der Arbeitsspeicher des Hosts als Speicherwert gemeldet.
+	UnifiedMemory string
+
 	Targets []Target
 	Peers   []string // zusätzliche Probe-Ziele (URL oder host:port)
 
@@ -75,6 +80,7 @@ func Default() Config {
 		DiscoveryEnabled: true,
 		OllamaProbe:      false,
 		ReportAddresses:  true,
+		UnifiedMemory:    "auto",
 		TapListen:        "0.0.0.0:9500",
 		TapKind:          "vllm",
 	}
@@ -149,6 +155,7 @@ func applyEnv(c *Config) {
 	envBool("AIMON_REPORT_ADDRESSES", &c.ReportAddresses)
 	envStr("AIMON_SSH_USER", &c.SSHUser)
 	envStr("AIMON_SSH_PORT", &c.SSHPort)
+	envStr("AIMON_UNIFIED_MEMORY", &c.UnifiedMemory)
 	if v := os.Getenv("AIMON_LABELS"); v != "" {
 		for _, kv := range strings.Split(v, ",") {
 			if k, val, ok := strings.Cut(strings.TrimSpace(kv), "="); ok {

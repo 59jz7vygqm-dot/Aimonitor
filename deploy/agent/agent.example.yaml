@@ -26,6 +26,13 @@ listen: 127.0.0.1:9100
 gpu: true
 host: true
 
+# Teilen sich CPU und GPU den Speicher (Grace Blackwell / DGX Spark / Jetson)?
+# auto erkennt es am GPU-Modell und an der Plattform. Bei solchen Systemen
+# meldet der Treiber keinen eigenen VRAM; der Agent schickt dann den
+# Arbeitsspeicher des Hosts als Speicherwert, gekennzeichnet mit memory=host.
+#   auto | true | false
+unified_memory: auto
+
 # Lokal laufende Dienste selbst finden (Portscan auf 127.0.0.1 plus
 # Fingerabdruck). Damit kommt ein neuer Server ohne zentrale Konfiguration aus.
 discovery: true
@@ -33,6 +40,13 @@ discovery: true
 # Synthetische TTFT-Probe für Ollama. Kostet pro Durchlauf einen echten
 # 1-Token-Request an das Modell – misst Bereitschaft, nicht Benutzerlatenz.
 ollama_probe: false
+
+# Adressen des Hosts melden, damit das Dashboard einen fertigen ssh-Befehl
+# anzeigen kann. Wer sein Dashboard weitergibt, schaltet das ab.
+report_addresses: true
+# Leer = automatisch ermittelt (SUDO_USER bzw. /etc/ssh/sshd_config).
+ssh_user: ""
+ssh_port: ""
 
 labels:
   site: rack-a
