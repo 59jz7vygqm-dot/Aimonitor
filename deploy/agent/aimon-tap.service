@@ -1,0 +1,33 @@
+[Unit]
+Description=aimon-tap (Messproxy im Inference-Pfad)
+Documentation=https://github.com/59jz7vygqm-dot/aimonitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# -upstream zeigt auf das echte Backend, -listen ist die Adresse, die
+# OpenWebUI künftig benutzt. Beides auch in agent.yaml setzbar.
+ExecStart=/usr/local/bin/aimon-agent tap -config /etc/aimon/agent.yaml
+Restart=always
+RestartSec=5s
+
+# Der Tap liegt im Datenpfad: er bekommt genug Ressourcen, damit er nicht
+# selbst zum Flaschenhals wird. Das ist der Unterschied zum Agent.
+LimitNOFILE=65536
+
+User=aimon
+Group=aimon
+DynamicUser=yes
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/aimon
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aimon-tap
+
+[Install]
+WantedBy=multi-user.target

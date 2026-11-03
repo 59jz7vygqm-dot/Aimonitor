@@ -1,0 +1,18 @@
+# Build-Ergebnisse
+web/dist/
+*.pyc
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Lokale Umgebung
+.venv/
+venv/
+deploy/.env
+*.log
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store

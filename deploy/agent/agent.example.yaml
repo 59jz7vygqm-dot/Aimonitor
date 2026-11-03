@@ -1,0 +1,73 @@
+# aimon-agent – Konfiguration
+#
+# Umgebungsvariablen haben Vorrang vor dieser Datei (AIMON_URL, AIMON_TOKEN, …).
+# Unbekannte Schlüssel werden ignoriert, damit eine neuere Konfiguration einen
+# älteren Agent nicht am Start hindert.
+
+server_url: http://aimon.example.lan:8420
+token: aimon_HIER_DAS_TOKEN_EINTRAGEN
+
+# Stabiler Name dieser Maschine. Nicht die IP – die ändert sich.
+node_name: gpu-vm-01
+
+# Scrape-Intervall für GPU, Host und Dienste.
+interval: 10s
+# Intervall für die teureren Dinge: Peer-Probes, Ollama-TTFT-Probe.
+probe_interval: 30s
+timeout: 5s
+
+# Wie viele Batches gepuffert werden, wenn der Server weg ist.
+# 120 × 10 s = 20 Minuten Historie, danach fallen die ältesten raus.
+buffer_batches: 120
+
+# Lokaler Debug-Endpunkt: curl http://127.0.0.1:9100/healthz
+listen: 127.0.0.1:9100
+
+gpu: true
+host: true
+
+# Lokal laufende Dienste selbst finden (Portscan auf 127.0.0.1 plus
+# Fingerabdruck). Damit kommt ein neuer Server ohne zentrale Konfiguration aus.
+discovery: true
+
+# Synthetische TTFT-Probe für Ollama. Kostet pro Durchlauf einen echten
+# 1-Token-Request an das Modell – misst Bereitschaft, nicht Benutzerlatenz.
+ollama_probe: false
+
+labels:
+  site: rack-a
+  role: inference
+
+# Zusätzliche Ziele, die dieser Host anpingen soll. Daraus entsteht die
+# Erreichbarkeitsmatrix im Dashboard. URL = HTTP-Check, host:port = TCP-Check.
+peers:
+  - http://openwebui.lan:3000/health
+  - http://privacy-proxy.lan:8888/healthz
+  - searxng.lan:8080
+
+# Dienste, die nicht auf den Standardports laufen oder nicht gefunden werden.
+# Was hier steht, gewinnt immer gegen die Discovery.
+targets:
+  - kind: vllm
+    url: http://127.0.0.1:8000
+    name: vLLM Qwen3-32B
+    labels:
+      model: Qwen3-32B-AWQ
+      tp: "2"
+
+  - kind: ollama
+    url: http://127.0.0.1:11434
+    # Modelle für die synthetische TTFT-Probe (nur mit ollama_probe: true)
+    models: gemma3:27b
+
+  - kind: comfyui
+    url: http://127.0.0.1:8188
+
+# --------------------------------------------------------------- Tap-Modus
+# Nur für `aimon-agent tap`. Der Tap sitzt zwischen OpenWebUI und dem Backend
+# und misst echte TTFT pro Request. OpenWebUI zeigt danach auf tap_listen.
+tap_listen: 0.0.0.0:9500
+tap_upstream: http://127.0.0.1:8000
+tap_kind: vllm
+# Leer lassen: wird aus tap_kind und tap_upstream abgeleitet.
+tap_service: ""

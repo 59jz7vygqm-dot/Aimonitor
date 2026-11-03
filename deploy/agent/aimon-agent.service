@@ -1,0 +1,38 @@
+[Unit]
+Description=aimon-agent (Metrik-Sammler für aimonitor)
+Documentation=https://github.com/59jz7vygqm-dot/aimonitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aimon-agent -config /etc/aimon/agent.yaml
+Restart=always
+RestartSec=10s
+
+# Der Agent darf den Host nie stören: niedrige Priorität bei CPU und IO.
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=25%
+MemoryMax=256M
+
+# Er liest /proc, /sys und ruft nvidia-smi auf - mehr braucht er nicht.
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+ReadOnlyPaths=/etc/aimon
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aimon-agent
+
+[Install]
+WantedBy=multi-user.target

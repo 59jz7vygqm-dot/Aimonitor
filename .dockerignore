@@ -1,0 +1,11 @@
+.git
+.github
+agent
+tools
+web/dist
+deploy/.env
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.venv
+venv
