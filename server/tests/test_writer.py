@@ -341,3 +341,25 @@ async def test_rollup_ohne_daten_setzt_keinen_wasserstand(db):
         total = await conn.fetchval(
             "SELECT sum(n) FROM samples_rollup WHERE bucket_s = 60")
     assert total == 12
+
+
+async def test_wartet_auf_datenbank_statt_zu_sterben(db, monkeypatch):
+    """Ist die DB kurz weg, muss der Start warten - nicht in eine
+    Neustartschleife fallen."""
+    from aimon import db as db_mod
+    from aimon.config import settings
+
+    good = settings.database_url
+    monkeypatch.setattr(settings, "database_url",
+                        "postgresql://nobody@127.0.0.1:1/nichts")
+    await db_mod.close_pool()
+
+    with pytest.raises(RuntimeError) as exc:
+        await db_mod.wait_for_db(timeout_s=1.0)
+    # Die Meldung muss sagen, was zu prüfen ist.
+    assert "AIMON_DATABASE_URL" in str(exc.value)
+
+    monkeypatch.setattr(settings, "database_url", good)
+    await db_mod.wait_for_db(timeout_s=10.0)
+    async with db_mod.pool().acquire() as conn:
+        assert await conn.fetchval("SELECT 1") == 1

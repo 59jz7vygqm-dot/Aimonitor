@@ -60,6 +60,38 @@ Entweder `sudo` davorsetzen oder einmalig:
 sudo usermod -aG docker "$USER" && newgrp docker
 ```
 
+### Wenn der Port tot bleibt
+
+`docker compose ps` zeigt „Running", aber nichts antwortet auf 8420:
+
+```bash
+sudo docker compose ps                  # Status und Health beider Container
+sudo docker compose logs --tail=50 server
+```
+
+Häufigste Ursachen:
+
+| Logzeile | Bedeutung |
+|---|---|
+| `Datenbank noch nicht bereit …` | normal beim Start, der Server wartet bis zu 120 s |
+| `Datenbank nach 120s nicht erreichbar` | `POSTGRES_PASSWORD` in `.env` passt nicht zum Volume. Die DB behält das Passwort aus der ersten Initialisierung. |
+| `Address already in use` | Port 8420 ist belegt, `AIMON_PORT` ändern |
+| Container `Restarting` | Startfehler, siehe Logzeilen darüber |
+
+Hat Compose beim Hochfahren nur „Running" statt „Recreated"/„Started" gemeldet,
+läuft noch der alte Container — dann neu erzeugen:
+
+```bash
+sudo docker compose up -d --build --force-recreate
+```
+
+Passwort im Volume und `.env` auseinandergelaufen? Nur zurücksetzen, wenn die
+Daten egal sind — **das löscht alle Messwerte**:
+
+```bash
+sudo docker compose down -v && sudo docker compose up -d --build
+```
+
 ### 2. Agent-Token anlegen
 
 ```bash

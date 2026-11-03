@@ -1,8 +1,10 @@
 """Datenbankzugriff: Pool, Migrationen, Timescale-Erkennung."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
+import time
 
 import asyncpg
 
@@ -58,9 +60,42 @@ async def close_pool() -> None:
         _pool = None
 
 
+async def wait_for_db(timeout_s: float = 120.0) -> None:
+    """Auf die Datenbank warten, statt sofort zu sterben.
+
+    Ohne das fällt der Server bei jedem DB-Neustart in eine Neustartschleife:
+    Container "Running", Port tot, und der Grund steht nur im Log. Der
+    Healthcheck der DB in docker-compose deckt den Erstart ab, nicht aber
+    einen späteren Neustart der DB.
+    """
+    delay = 0.5
+    deadline = time.monotonic() + timeout_s
+    last: Exception | None = None
+    while True:
+        try:
+            p = await init_pool()
+            async with p.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            return
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            await close_pool()
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"Datenbank nach {timeout_s:.0f}s nicht erreichbar: {exc}\n"
+                    f"AIMON_DATABASE_URL prüfen (Host, Passwort, Datenbankname). "
+                    f"Im Compose-Setup: läuft der Dienst 'db' und ist er healthy?"
+                ) from exc
+            log.warning("Datenbank noch nicht bereit (%s) – neuer Versuch in %.1fs",
+                        exc, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 5.0)
+
+
 async def migrate() -> None:
     """Schema anlegen. Timescale ist optional und wird erkannt, nicht erzwungen."""
     global _timescale
+    await wait_for_db()
     p = await init_pool()
     core = (MIGRATIONS / "001_core.sql").read_text()
     async with p.acquire() as conn:
