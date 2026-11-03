@@ -80,6 +80,26 @@ Häufigste Ursachen:
 | `Address already in use` | Port 8420 ist belegt, `AIMON_PORT` ändern |
 | Container `Restarting` | Startfehler, siehe Logzeilen darüber |
 
+**Läuft im Container überhaupt der Code, den du erwartest?** Die erste
+Logzeile des Servers nennt Version und Datenbank-Adresse (ohne Passwort):
+
+```
+aimon-server 0.1.0, Datenbank postgresql://aimon:***@db:5432/aimon
+```
+
+Fehlt diese Zeile und der Fehler sieht aus wie vorher, ist das Image alt. Das
+passiert vor allem, wenn `git pull` nicht durchlief — etwa weil Git das
+Verzeichnis einem anderen Benutzer zuordnet:
+
+```bash
+git config --global --add safe.directory /opt/Aimonitor
+git -C /opt/Aimonitor pull
+git -C /opt/Aimonitor log --oneline -1      # sollte den erwarteten Commit zeigen
+cd /opt/Aimonitor/deploy && sudo docker compose up -d --build --force-recreate
+```
+
+Zeigt der Build überall `CACHED`, hat sich am Quelltext nichts geändert.
+
 Hat Compose beim Hochfahren nur „Running" statt „Recreated"/„Started" gemeldet,
 läuft noch der alte Container — dann neu erzeugen:
 

@@ -58,3 +58,25 @@ def test_defaults_ohne_umgebung(monkeypatch):
               "AIMON_DB_USER", "AIMON_DB_PASSWORD", "AIMON_DB_NAME"):
         monkeypatch.delenv(k, raising=False)
     assert _database_url() == "postgresql://aimon:aimon@localhost:5432/aimon"
+
+
+def test_passwort_wird_im_log_maskiert(monkeypatch):
+    """Die Startmeldung zeigt die Adresse - aber nie das Passwort."""
+    from aimon import db as db_mod
+    from aimon.config import settings
+
+    monkeypatch.setattr(settings, "database_url",
+                        "postgresql://aimon:c8RjEbKqsXNnBuBqSB%2Fx@db:5432/aimon")
+    out = db_mod.masked_dsn()
+    assert "c8RjEbKqsXNnBuBqSB" not in out
+    assert "***" in out
+    assert "db:5432" in out
+    assert out.endswith("/aimon")
+
+
+def test_maskierung_haelt_kaputte_adresse_aus(monkeypatch):
+    from aimon import db as db_mod
+    from aimon.config import settings
+
+    monkeypatch.setattr(settings, "database_url", "das ist keine url")
+    assert isinstance(db_mod.masked_dsn(), str)

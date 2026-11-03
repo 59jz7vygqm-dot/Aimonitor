@@ -7,6 +7,7 @@ import pathlib
 import time
 
 import asyncpg
+from urllib.parse import urlparse, urlunparse
 
 from .config import settings
 
@@ -122,9 +123,27 @@ def _fatal_reason(exc: Exception) -> str | None:
     return None
 
 
+def masked_dsn() -> str:
+    """Die Verbindungsadresse ohne Passwort, zum Loggen."""
+    try:
+        u = urlparse(settings.database_url)
+        if u.password:
+            netloc = f"{u.username or ''}:***@{u.hostname or ''}"
+            if u.port:
+                netloc += f":{u.port}"
+            return urlunparse(u._replace(netloc=netloc))
+        return settings.database_url
+    except Exception:  # noqa: BLE001
+        return "<nicht lesbar>"
+
+
 async def migrate() -> None:
     """Schema anlegen. Timescale ist optional und wird erkannt, nicht erzwungen."""
     global _timescale
+    # Beim Start protokollieren, womit tatsächlich verbunden wird. Ohne das
+    # ist bei einem Startfehler nicht erkennbar, ob überhaupt die erwartete
+    # Konfiguration im Container liegt.
+    log.info("aimon-server %s, Datenbank %s", settings.version, masked_dsn())
     await wait_for_db()
     p = await init_pool()
     core = (MIGRATIONS / "001_core.sql").read_text()
