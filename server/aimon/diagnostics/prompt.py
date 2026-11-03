@@ -135,6 +135,29 @@ class Redactor:
         return sorted(((a, o) for o, a in self._map.items()), key=lambda kv: kv[0])
 
 
+
+def ssh_command(labels: dict | None, fallback_host: str) -> str:
+    """Baut den ssh-Befehl aus dem, was der Agent gemeldet hat.
+
+    Ohne gemeldete Adresse wird der Node-Name genommen - der ist oft auch
+    im DNS auflösbar. Ohne Benutzer bleibt der Befehl ohne `user@`, dann
+    nimmt ssh den lokalen Benutzer.
+    """
+    labels = labels or {}
+    host = labels.get("ip") or fallback_host
+    if not host:
+        return ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"          # IPv6
+    user = labels.get("ssh_user")
+    port = labels.get("ssh_port")
+    cmd = "ssh "
+    if port and port != "22":
+        cmd += f"-p {port} "
+    cmd += f"{user}@{host}" if user else host
+    return cmd
+
+
 def _fmt(v: Any, unit: str = "") -> str:
     if v is None:
         return "—"
@@ -351,18 +374,36 @@ def _render(data: dict, red: Redactor, user_note: str | None, include_evidence: 
     L.append("")
     L.append("### Maschinen")
     L.append("")
-    L.append("| Maschine | Agent | Status | Labels |")
-    L.append("|---|---|---|---|")
+    # Der Zugang gehört nur in einen Bericht, der nicht geteilt wird. Mit
+    # Platzhaltern wäre ein ssh-Befehl ohnehin wertlos und würde die
+    # Anonymisierung unterlaufen.
+    show_access = not red.enabled and any(
+        ssh_command(n["labels"], n["name"]) for n in data["nodes"]
+    )
+    head = "| Maschine | Agent | Status | Labels |"
+    sep = "|---|---|---|---|"
+    if show_access:
+        head = "| Maschine | Agent | Status | Zugang | Labels |"
+        sep = "|---|---|---|---|---|"
+    L.append(head)
+    L.append(sep)
     for n in data["nodes"]:
         status = (
             "online" if n["age_s"] <= settings.stale_after_s
             else f"STALE (seit {int(n['age_s'])}s stumm)"
         )
-        labels = ", ".join(f"{k}={v}" for k, v in (n["labels"] or {}).items()) or "—"
-        L.append(
-            f"| `{red.node(n['name'])}` | {n['agent_version'] or '—'} | {status} "
-            f"| {red.text(labels)} |"
-        )
+        lbl = dict(n["labels"] or {})
+        # Zugangsdaten stehen in der eigenen Spalte, nicht nochmal als Label.
+        for k in ("ip", "ips", "ssh_user", "ssh_port"):
+            lbl.pop(k, None)
+        labels = ", ".join(f"{k}={v}" for k, v in lbl.items()) or "—"
+        row = (f"| `{red.node(n['name'])}` | {n['agent_version'] or '—'} "
+               f"| {status} ")
+        if show_access:
+            cmd = ssh_command(n["labels"], n["name"])
+            row += f"| {'`' + cmd + '`' if cmd else '—'} "
+        row += f"| {red.text(labels)} |"
+        L.append(row)
     L.append("")
 
     if data["gpus"]:

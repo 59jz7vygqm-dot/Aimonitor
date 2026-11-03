@@ -21,15 +21,30 @@ export async function render(root, state) {
     const open = inc.filter((i) => !i.ended_at);
     const crit = open.filter((i) => i.severity === 'critical');
     const errs = open.filter((i) => i.severity === 'error');
+    const warns = open.filter((i) => i.severity === 'warning');
+    // Info-Incidents sind Hinweise, keine Warnungen. Sie im Warnbanner
+    // mitzuzählen entwertet das Banner.
+    const infos = open.filter((i) => i.severity === 'info' || i.severity === 'debug');
+    const infoSuffix = infos.length
+        ? ` · ${infos.length} Hinweis${infos.length === 1 ? '' : 'e'}` : '';
+
     if (crit.length || errs.length) {
-        root.appendChild(h(`<div class="banner critical">${statusHtml('critical',
-            `${crit.length} kritisch, ${errs.length} Fehler`)}
-            <span>${escapeHtml(open.slice(0, 2).map((i) => i.title).join(' · '))}${
-                open.length > 2 ? ` · und ${open.length - 2} weitere` : ''}</span></div>`));
-    } else if (open.length) {
+        const lead = [crit.length && `${crit.length} kritisch`,
+            errs.length && `${errs.length} Fehler`,
+            warns.length && `${warns.length} Warnungen`].filter(Boolean).join(', ');
+        const top = [...crit, ...errs];
+        root.appendChild(h(`<div class="banner critical">${statusHtml('critical', lead)}
+            <span>${escapeHtml(top.slice(0, 2).map((i) => i.title).join(' · '))}${
+                top.length > 2 ? ` · und ${top.length - 2} weitere` : ''}</span></div>`));
+    } else if (warns.length) {
         root.appendChild(h(`<div class="banner warning">${statusHtml('warning',
-            `${open.length} Warnungen`)} <span>${escapeHtml(
-                open.slice(0, 3).map((i) => i.title).join(' · '))}</span></div>`));
+            `${warns.length} Warnung${warns.length === 1 ? '' : 'en'}${infoSuffix}`)}
+            <span>${escapeHtml(
+                warns.slice(0, 3).map((i) => i.title).join(' · '))}</span></div>`));
+    } else if (infos.length) {
+        root.appendChild(h(`<div class="banner good">${statusHtml('good',
+            `Nichts Kritisches${infoSuffix}`)} <span>${escapeHtml(
+                infos.slice(0, 2).map((i) => i.title).join(' · '))}</span></div>`));
     } else {
         root.appendChild(h(`<div class="banner good">${statusHtml('good',
             'Keine offenen Incidents')} <span>Alle Regeln ruhig.</span></div>`));
@@ -120,16 +135,7 @@ export async function render(root, state) {
         { label: 'Leistung', num: true, html: (r) => r.power_w === null ? '—'
             : `${r.power_w.toFixed(0)}${r.power_limit_w
                 ? ` / ${r.power_limit_w.toFixed(0)}` : ''} W` },
-        { label: 'Zustand', html: (r) => {
-            if (!r.fresh) return statusHtml('warning',
-                `alt (${fmtDuration(r.age_s)})`);
-            const t = [];
-            if (r.throttle_thermal > 0) t.push('thermisch');
-            if (r.throttle_power > 0) t.push('Power-Limit');
-            if (r.throttle_hw > 0) t.push('Hardware');
-            return t.length ? statusHtml('warning', 'throttelt: ' + t.join(', '))
-                : statusHtml('good', 'ok');
-        } },
+        { label: 'Zustand', html: (r) => gpuState(r) },
     ], gpus)));
 
     // --- Inference
@@ -221,4 +227,31 @@ export function toSeries(res, nameFn, colorOffset = 0) {
         points: s.points,
         color: seriesColor(i + colorOffset),
     }));
+}
+
+
+/* Zustand einer GPU in einem Satz.
+ *
+ * Power-Cap unter Last ist der Normalbetrieb einer Datacenter-Karte und wird
+ * deshalb neutral benannt, nicht als Warnung. Nur thermisches oder
+ * Hardware-Throttling heißt wirklich: hier stimmt etwas nicht.
+ */
+export function gpuState(r) {
+    if (!r.fresh) {
+        return statusHtml('warning', `Daten veraltet (${fmtDuration(r.age_s)})`);
+    }
+    const bad = [];
+    if (r.throttle_thermal > 0) bad.push('thermisch');
+    if (r.throttle_hw > 0) bad.push('Hardware');
+    if (bad.length) {
+        return statusHtml('warning', 'throttelt: ' + bad.join(', '));
+    }
+    if (r.throttle_power > 0) {
+        const busy = r.util_pct !== null && r.util_pct >= 30;
+        return busy
+            ? statusHtml('muted', 'am Leistungslimit')
+            : statusHtml('warning',
+                `Leistungslimit bei ${fmtNum(r.util_pct, 0)} % Last`);
+    }
+    return statusHtml('good', 'ok');
 }

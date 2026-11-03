@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -51,11 +52,15 @@ func main() {
 		case "discover":
 			runDiscover()
 			return
+		case "gpudump":
+			runGPUDump()
+			return
 		case "version":
 			fmt.Println(version)
 			return
 		default:
-			log.Fatalf("unbekanntes Kommando %q (tap|check|discover|version)", cmd)
+			log.Fatalf("unbekanntes Kommando %q "+
+				"(tap|check|discover|gpudump|version)", cmd)
 		}
 	}
 	runAgent()
@@ -138,7 +143,7 @@ func runAgent() {
 		Name:         c.NodeName,
 		Hostname:     c.Hostname,
 		AgentVersion: version,
-		Labels:       c.Labels,
+		Labels:       nodeLabels(c),
 	}
 
 	if c.ListenAddr != "" {
@@ -469,4 +474,114 @@ func safePrefix(s string) string {
 		return "***"
 	}
 	return s[:8]
+}
+
+// runGPUDump zeigt, was der Treiber tatsächlich meldet, und wie der Agent es
+// auswertet. Gedacht für Karten, bei denen im Dashboard Werte fehlen -
+// vor allem Systeme mit gemeinsamem Speicher, wo `--query-gpu=memory.total`
+// ein N/A liefert.
+func runGPUDump() {
+	flag.Parse()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	g := collector.NewGPUCollector()
+	fmt.Printf("nvidia-smi: %s\n\n", g.Binary)
+
+	fmt.Println("=== 1. --query-gpu (der übliche Weg) ===")
+	q, err := collector.RunNvidiaSmi(ctx, g.Binary, collector.GPUQueryArgs()...)
+	if err != nil {
+		fmt.Printf("FEHLER: %v\n", err)
+	} else {
+		fmt.Println(strings.TrimRight(q, "\n"))
+	}
+
+	fmt.Println("\n=== 2. -q -d MEMORY (Rückfallweg für gemeinsamen Speicher) ===")
+	m, err := collector.RunNvidiaSmi(ctx, g.Binary, "-q", "-d", "MEMORY")
+	if err != nil {
+		fmt.Printf("FEHLER: %v\n", err)
+	} else {
+		fmt.Println(strings.TrimRight(m, "\n"))
+		fmt.Println("\n--- so liest der Agent das: ---")
+		parsed := collector.ParseNvidiaSmiMemory(m)
+		if len(parsed) == 0 {
+			fmt.Println("(nichts erkannt – bitte die Ausgabe oben weitergeben)")
+		}
+		for _, p := range parsed {
+			fmt.Printf("  GPU %d (%s): total=%.0f MiB (erkannt=%v) "+
+				"used=%.0f MiB (erkannt=%v) reserved=%.0f MiB\n",
+				p.Index, p.BusID, p.TotalMiB, p.HasTotal,
+				p.UsedMiB, p.HasUsed, p.ReservedMiB)
+		}
+	}
+
+	fmt.Println("\n=== 3. Was der Agent daraus an Messwerten schickt ===")
+	b, err := g.Collect(ctx, float64(time.Now().Unix()))
+	if err != nil {
+		fmt.Printf("FEHLER: %v\n", err)
+		return
+	}
+	if len(b.Samples) == 0 {
+		fmt.Println("(keine – keine NVIDIA-GPU erkannt)")
+	}
+	for _, s := range b.Samples {
+		lbl := ""
+		if len(s.Labels) > 0 {
+			parts := make([]string, 0, len(s.Labels))
+			for k, v := range s.Labels {
+				parts = append(parts, k+"="+v)
+			}
+			sort.Strings(parts)
+			lbl = "{" + strings.Join(parts, ",") + "}"
+		}
+		fmt.Printf("  %-28s %-46s %g\n", s.Metric, lbl, s.Value)
+	}
+	for _, e := range b.Events {
+		fmt.Printf("\n  Hinweis [%s] %s\n", e.Severity, e.Title)
+		for k, v := range e.Detail {
+			fmt.Printf("    %s: %v\n", k, v)
+		}
+	}
+}
+
+// nodeLabels ergänzt die konfigurierten Labels um das, was man braucht, um
+// sich auf die Maschine aufzuschalten: Adressen, SSH-Port und ein Vorschlag
+// für den Benutzer. Das Dashboard baut daraus einen kopierbaren ssh-Befehl.
+//
+// Abschaltbar über report_addresses: false - wer sein Dashboard weitergibt,
+// will die inneren Adressen seines Netzes vielleicht nicht darin haben.
+func nodeLabels(c config.Config) map[string]string {
+	labels := map[string]string{}
+	for k, v := range c.Labels {
+		labels[k] = v
+	}
+	if !c.ReportAddresses {
+		return labels
+	}
+
+	if addrs := collector.LocalAddresses(); len(addrs) > 0 {
+		labels["ip"] = addrs[0]
+		if len(addrs) > 1 {
+			labels["ips"] = strings.Join(addrs, ",")
+		}
+	}
+
+	port := c.SSHPort
+	if port == "" {
+		port = collector.SSHPort()
+	}
+	if port != "" && port != "22" {
+		labels["ssh_port"] = port
+	}
+
+	user := c.SSHUser
+	if user == "" {
+		user = collector.LoginUser()
+	}
+	// root als Vorschlag ist meist falsch: der Agent läuft als root, der
+	// Mensch meldet sich anders an. Dann lieber keinen Benutzer vorschlagen.
+	if user != "" && user != "root" {
+		labels["ssh_user"] = user
+	}
+	return labels
 }

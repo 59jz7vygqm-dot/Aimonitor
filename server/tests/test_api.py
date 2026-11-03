@@ -395,3 +395,37 @@ async def test_token_wird_nur_als_hash_gespeichert(client, db):
         row = await conn.fetchrow("SELECT * FROM api_tokens WHERE name = 'geheim'")
     assert tok not in str(dict(row))
     assert len(row["token_hash"]) == 64
+
+
+async def test_bericht_zeigt_ssh_zugang(client):
+    """Der Bericht soll sagen, wie man auf die Maschine kommt."""
+    await client.post("/api/v1/ingest/batch", json={
+        "node": {"name": "ki", "agent_version": "0.1.0",
+                 "labels": {"ip": "10.0.0.5", "ssh_user": "kvkh",
+                            "ssh_port": "2222", "site": "rack-a"}},
+        "samples": [{"metric": "gpu.temp_c", "value": 60, "ts": ts(),
+                     "labels": {"gpu": "0"}}],
+    })
+    d = (await client.get("/api/v1/diagnostics/prompt",
+                          params={"window_s": 3600})).json()
+    assert "ssh -p 2222 kvkh@10.0.0.5" in d["prompt"]
+    assert "Zugang" in d["prompt"]
+    # Die Adresse steht in ihrer Spalte, nicht zusätzlich in den Labels.
+    assert "ip=10.0.0.5" not in d["prompt"]
+    assert "site=rack-a" in d["prompt"]
+
+
+async def test_bericht_mit_platzhaltern_zeigt_keinen_zugang(client):
+    """Ein anonymisierter Bericht darf keinen ssh-Befehl enthalten -
+    der würde die Anonymisierung sofort aufheben."""
+    await client.post("/api/v1/ingest/batch", json={
+        "node": {"name": "ki",
+                 "labels": {"ip": "10.0.0.5", "ssh_user": "kvkh"}},
+        "samples": [{"metric": "gpu.temp_c", "value": 60, "ts": ts(),
+                     "labels": {"gpu": "0"}}],
+    })
+    d = (await client.get("/api/v1/diagnostics/prompt",
+                          params={"window_s": 3600, "redact": "true"})).json()
+    assert "10.0.0.5" not in d["prompt"]
+    assert "kvkh" not in d["prompt"]
+    assert "Zugang" not in d["prompt"]

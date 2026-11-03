@@ -41,6 +41,14 @@ type Config struct {
 	DiscoveryEnabled bool
 	OllamaProbe      bool
 
+	// Für den SSH-Befehl, den das Dashboard anzeigt. Leer = automatisch
+	// ermittelt bzw. weggelassen.
+	SSHUser string
+	SSHPort string
+	// ReportAddresses: Adressen des Hosts mitschicken. Wer das nicht will
+	// (etwa weil das Dashboard weitergegeben wird), schaltet es hier ab.
+	ReportAddresses bool
+
 	Targets []Target
 	Peers   []string // zusätzliche Probe-Ziele (URL oder host:port)
 
@@ -66,6 +74,7 @@ func Default() Config {
 		HostEnabled:      true,
 		DiscoveryEnabled: true,
 		OllamaProbe:      false,
+		ReportAddresses:  true,
 		TapListen:        "0.0.0.0:9500",
 		TapKind:          "vllm",
 	}
@@ -137,6 +146,9 @@ func applyEnv(c *Config) {
 	envBool("AIMON_HOST", &c.HostEnabled)
 	envBool("AIMON_DISCOVERY", &c.DiscoveryEnabled)
 	envBool("AIMON_OLLAMA_PROBE", &c.OllamaProbe)
+	envBool("AIMON_REPORT_ADDRESSES", &c.ReportAddresses)
+	envStr("AIMON_SSH_USER", &c.SSHUser)
+	envStr("AIMON_SSH_PORT", &c.SSHPort)
 	if v := os.Getenv("AIMON_LABELS"); v != "" {
 		for _, kv := range strings.Split(v, ",") {
 			if k, val, ok := strings.Cut(strings.TrimSpace(kv), "="); ok {

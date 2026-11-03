@@ -44,6 +44,9 @@ type GPUCollector struct {
 	// bei jedem Intervall dieselbe Fehlermeldung schickt.
 	failCount int
 	absent    bool
+	// memWarned verhindert, dass dieselbe Erklärung bei jedem Scrape erneut
+	// als Ereignis geschickt wird.
+	memWarned bool
 }
 
 func NewGPUCollector() *GPUCollector {
@@ -98,6 +101,17 @@ func (g *GPUCollector) Collect(ctx context.Context, now float64) (model.Batch, e
 		return b, fmt.Errorf("nvidia-smi CSV: %w", err)
 	}
 
+	// Liefert --query-gpu keinen Speicher (gemeinsamer Speicher auf
+	// Grace-Blackwell-Systemen), die ausführliche Ausgabe nachladen. Einmal
+	// pro Scrape, nicht pro GPU.
+	var memFallback map[int]GPUMemory
+	for _, row := range rows {
+		if len(row) >= len(gpuQueryFields) && !valid(row[5]) { // memory.total
+			memFallback = g.queryMemory(ctx)
+			break
+		}
+	}
+
 	count := 0
 	for _, row := range rows {
 		if len(row) < len(gpuQueryFields) {
@@ -131,9 +145,68 @@ func (g *GPUCollector) Collect(ctx context.Context, now float64) (model.Batch, e
 
 		add("gpu.util_pct", "utilization.gpu", 1)
 		add("gpu.mem_util_pct", "utilization.memory", 1)
-		add("gpu.mem_total_bytes", "memory.total", mib)
-		add("gpu.mem_used_bytes", "memory.used", mib)
-		add("gpu.mem_reserved_bytes", "memory.reserved", mib)
+
+		if _, ok := num(f["memory.total"]); ok {
+			add("gpu.mem_total_bytes", "memory.total", mib)
+			add("gpu.mem_used_bytes", "memory.used", mib)
+			add("gpu.mem_reserved_bytes", "memory.reserved", mib)
+		} else if fb, ok := memFallback[gpuIndex(idx)]; ok && fb.HasTotal {
+			// Zahlen aus `nvidia-smi -q`. Das Label sagt, woher sie kommen -
+			// auf Systemen mit gemeinsamem Speicher bedeutet "frei" etwas
+			// anderes als bei einer Karte mit eigenem VRAM.
+			ulbl := map[string]string{}
+			for k, v := range lbl {
+				ulbl[k] = v
+			}
+			ulbl["memory"] = "unified"
+			b.Samples = append(b.Samples,
+				model.Sample{Metric: "gpu.mem_total_bytes",
+					Value: fb.TotalMiB * mib, TS: now, Labels: ulbl},
+			)
+			if fb.HasUsed {
+				b.Samples = append(b.Samples,
+					model.Sample{Metric: "gpu.mem_used_bytes",
+						Value: fb.UsedMiB * mib, TS: now, Labels: ulbl},
+				)
+			}
+			if fb.ReservedMiB > 0 {
+				b.Samples = append(b.Samples,
+					model.Sample{Metric: "gpu.mem_reserved_bytes",
+						Value: fb.ReservedMiB * mib, TS: now, Labels: ulbl},
+				)
+			}
+			b.Samples = append(b.Samples,
+				model.Sample{Metric: "gpu.mem_unified", Value: 1, TS: now,
+					Labels: lbl},
+			)
+		} else {
+			// Keine der beiden Quellen liefert etwas. Das ausdrücklich
+			// melden, statt stillschweigend eine Lücke zu lassen - sonst
+			// sieht es im Dashboard aus wie ein Ausfall des Agents.
+			b.Samples = append(b.Samples,
+				model.Sample{Metric: "gpu.mem_unavailable", Value: 1, TS: now,
+					Labels: lbl},
+			)
+			if !g.memWarned {
+				g.memWarned = true
+				b.Events = append(b.Events, model.Event{
+					Kind:     "gpu.memory_unavailable",
+					Severity: "info",
+					Title:    "Der Treiber meldet für diese GPU keinen Speicher",
+					TS:       now,
+					Detail: map[string]any{
+						"gpu":  idx,
+						"name": f["name"],
+						"hinweis": "Weder --query-gpu=memory.total noch " +
+							"'nvidia-smi -q -d MEMORY' liefern Zahlen. Auf Systemen " +
+							"mit gemeinsamem Speicher ist der Arbeitsspeicher des " +
+							"Hosts die eigentliche Grenze - siehe host.mem_used_bytes. " +
+							"Rohausgabe zum Nachreichen: 'aimon-agent gpudump'.",
+					},
+					DedupKey: "gpu.memory_unavailable:" + idx,
+				})
+			}
+		}
 		add("gpu.temp_c", "temperature.gpu", 1)
 		add("gpu.temp_mem_c", "temperature.memory", 1)
 		add("gpu.power_w", "power.draw", 1)
@@ -247,4 +320,40 @@ func num(s string) (float64, bool) {
 		return 0, false
 	}
 	return v, true
+}
+
+// queryMemory holt die Speicherwerte aus der ausführlichen Ausgabe.
+// Fehlschläge sind kein Fehler: dann bleibt es eben bei der Lücke.
+func (g *GPUCollector) queryMemory(ctx context.Context) map[int]GPUMemory {
+	out, err := runCmd(ctx, g.Binary, "-q", "-d", "MEMORY")
+	if err != nil {
+		return nil
+	}
+	res := map[int]GPUMemory{}
+	for _, m := range ParseNvidiaSmiMemory(out) {
+		res[m.Index] = m
+	}
+	return res
+}
+
+func gpuIndex(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// RunNvidiaSmi und GPUQueryArgs sind für den Diagnosebefehl `aimon-agent
+// gpudump` nach außen gelegt: der soll genau das zeigen, was der Collector
+// auch benutzt, und nicht eine zweite, möglicherweise abweichende Fassung.
+func RunNvidiaSmi(ctx context.Context, bin string, args ...string) (string, error) {
+	return runCmd(ctx, bin, args...)
+}
+
+func GPUQueryArgs() []string {
+	return []string{
+		"--query-gpu=" + strings.Join(gpuQueryFields, ","),
+		"--format=csv,noheader,nounits",
+	}
 }

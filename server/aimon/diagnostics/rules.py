@@ -125,9 +125,9 @@ async def _rule_gpu(conn) -> list[Finding]:
                         },
                     )
                 )
+        # Thermisches und Hardware-Throttling heißt: etwas stimmt nicht.
         for metric, label in (
             ("gpu.throttle_thermal", "thermisch"),
-            ("gpu.throttle_power", "Power-Limit"),
             ("gpu.throttle_hw", "Hardware"),
         ):
             if (m.get(metric) or 0) > 0:
@@ -139,8 +139,58 @@ async def _rule_gpu(conn) -> list[Finding]:
                             "reason": label, "temp_c": m.get("gpu.temp_c"),
                             "power_w": m.get("gpu.power_w"),
                             "power_limit_w": m.get("gpu.power_limit_w"),
-                            "clock_effect": "Takt wird reduziert; TTFT und Durchsatz sinken "
-                                            "ohne dass eine Fehlermeldung auftaucht.",
+                            "util_pct": m.get("gpu.util_pct"),
+                            "clock_effect": "Takt wird reduziert; TTFT und Durchsatz "
+                                            "sinken, ohne dass eine Fehlermeldung "
+                                            "auftaucht.",
+                        },
+                    )
+                )
+
+        # Power-Cap ist etwas anderes: eine Karte, die unter Last an ihrem
+        # Leistungslimit arbeitet, tut genau das, wofür sie gebaut ist. Eine
+        # L4 mit 70 von 72 W bei 100 % Auslastung ist der Normalzustand, keine
+        # Störung. Als Warnung gemeldet würde das Dauerfeuer erzeugen und die
+        # echten Warnungen daneben entwerten.
+        #
+        # Gemeldet wird deshalb nur der Fall, der wirklich etwas bedeutet:
+        # Power-Cap bei *niedriger* Auslastung. Das deutet auf ein zu eng
+        # gesetztes Limit, eine schwache Stromversorgung oder einen Treiber-
+        # bzw. Sensorfehler hin - und erklärt, warum die Karte langsam ist,
+        # obwohl sie nichts tut.
+        if (m.get("gpu.throttle_power") or 0) > 0:
+            util = m.get("gpu.util_pct")
+            power = m.get("gpu.power_w")
+            limit = m.get("gpu.power_limit_w")
+            near_limit = (
+                power is not None and limit and power >= limit * 0.9
+            )
+            if util is not None and util < settings.power_cap_idle_util_pct:
+                out.append(
+                    Finding(
+                        "gpu.power_cap_idle",
+                        "warning" if near_limit else "info",
+                        "gpu", subj,
+                        f"GPU {subj} meldet Power-Limit bei nur {util:.0f} % Last",
+                        {
+                            "util_pct": round(util, 1),
+                            "power_w": power,
+                            "power_limit_w": limit,
+                            "temp_c": m.get("gpu.temp_c"),
+                            "bedeutung":
+                                "Das Leistungslimit greift, obwohl die Karte kaum "
+                                "rechnet. Mögliche Ursachen: zu eng gesetztes Limit "
+                                "(nvidia-smi -q -d POWER), zu schwache oder geteilte "
+                                "Stromversorgung, oder der Treiber meldet das Flag "
+                                "dauerhaft. Bei Systemen mit gemeinsamem Leistungs-"
+                                "budget (z. B. Grace-Blackwell-Module) ist ein "
+                                "gesetztes Flag im Leerlauf auch schlicht normal.",
+                            "zu_prüfen": [
+                                "nvidia-smi -q -d POWER   (Enforced Power Limit)",
+                                "nvidia-smi -q -d PERFORMANCE   (welche Gründe aktiv sind)",
+                                "Rechnet auf der Karte überhaupt ein Prozess? "
+                                "Siehe gpu.proc_mem_bytes im Explorer.",
+                            ],
                         },
                     )
                 )
@@ -643,12 +693,21 @@ async def reconcile(findings: list[Finding]) -> dict[str, int]:
 
 
 async def rules_loop() -> None:
+    from . import notify
+
     await asyncio.sleep(10)
     while True:
         try:
             res = await reconcile(await evaluate())
             if res["opened"] or res["closed"]:
                 log.info("Incidents: %s", res)
+            # Benachrichtigungen laufen im selben Takt, aber getrennt:
+            # ein Fehler beim Verschicken darf das Regelwerk nicht anhalten.
+            if notify.enabled():
+                try:
+                    await notify.run_once()
+                except Exception:
+                    log.exception("Benachrichtigung fehlgeschlagen")
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -147,8 +147,10 @@ async def migrate() -> None:
     await wait_for_db()
     p = await init_pool()
     core = (MIGRATIONS / "001_core.sql").read_text()
+    alerts = (MIGRATIONS / "003_alerts.sql").read_text()
     async with p.acquire() as conn:
         await conn.execute(core)
+        await conn.execute(alerts)
 
         try:
             await conn.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")

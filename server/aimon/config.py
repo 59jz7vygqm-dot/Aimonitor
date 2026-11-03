@@ -119,10 +119,72 @@ class Settings:
     ttft_warn_ms: float = field(default_factory=lambda: _f("AIMON_TTFT_WARN_MS", 2000.0))
     ttft_crit_ms: float = field(default_factory=lambda: _f("AIMON_TTFT_CRIT_MS", 8000.0))
     kv_cache_warn_pct: float = field(default_factory=lambda: _f("AIMON_KV_CACHE_WARN_PCT", 90.0))
+    # Unterhalb dieser Auslastung ist ein gesetztes Power-Cap-Flag auffällig;
+    # darüber ist es der Normalbetrieb einer ausgelasteten Karte.
+    power_cap_idle_util_pct: float = field(
+        default_factory=lambda: _f("AIMON_POWER_CAP_IDLE_UTIL_PCT", 30.0)
+    )
     headroom_warn_pct: float = field(default_factory=lambda: _f("AIMON_HEADROOM_WARN_PCT", 20.0))
     headroom_crit_pct: float = field(default_factory=lambda: _f("AIMON_HEADROOM_CRIT_PCT", 5.0))
     disk_warn_pct: float = field(default_factory=lambda: _f("AIMON_DISK_WARN_PCT", 88.0))
     block_rate_warn_pct: float = field(default_factory=lambda: _f("AIMON_BLOCK_RATE_WARN_PCT", 25.0))
+
+    # ------------------------------------------------------------ Alerting
+    #
+    # Default aus. Eingeschaltet wird nur bei kritischen Incidents benachrichtigt,
+    # und erst, wenn sie eine Weile offen sind - sonst meldet sich das System
+    # bei jeder kurzen Lastspitze und wird nach einer Woche weggefiltert.
+    alert_min_severity: str = field(
+        default_factory=lambda: (os.getenv("AIMON_ALERT_MIN_SEVERITY") or "critical")
+        .strip().lower()
+    )
+    alert_min_duration_s: int = field(
+        default_factory=lambda: _i("AIMON_ALERT_MIN_DURATION_S", 300)
+    )
+    alert_send_resolved: bool = field(
+        default_factory=lambda: _b("AIMON_ALERT_SEND_RESOLVED", True)
+    )
+    # Höchstens so viele Benachrichtigungen pro Stunde, über alle Incidents.
+    # Bremse gegen Ketteneffekte: fällt ein Switch aus, sind sofort zwanzig
+    # Dinge kritisch, und zwanzig Mails helfen niemandem.
+    alert_max_per_hour: int = field(
+        default_factory=lambda: _i("AIMON_ALERT_MAX_PER_HOUR", 10)
+    )
+
+    alert_webhook_url: str | None = field(
+        default_factory=lambda: os.getenv("AIMON_ALERT_WEBHOOK_URL") or None
+    )
+    alert_webhook_headers: str | None = field(
+        default_factory=lambda: os.getenv("AIMON_ALERT_WEBHOOK_HEADERS") or None
+    )
+
+    alert_smtp_host: str | None = field(
+        default_factory=lambda: os.getenv("AIMON_ALERT_SMTP_HOST") or None
+    )
+    alert_smtp_port: int = field(default_factory=lambda: _i("AIMON_ALERT_SMTP_PORT", 587))
+    alert_smtp_user: str | None = field(
+        default_factory=lambda: os.getenv("AIMON_ALERT_SMTP_USER") or None
+    )
+    alert_smtp_password: str | None = field(
+        default_factory=lambda: os.getenv("AIMON_ALERT_SMTP_PASSWORD") or None
+    )
+    alert_smtp_tls: str = field(
+        default_factory=lambda: (os.getenv("AIMON_ALERT_SMTP_TLS") or "starttls")
+        .strip().lower()
+    )
+    alert_mail_from: str | None = field(
+        default_factory=lambda: os.getenv("AIMON_ALERT_MAIL_FROM") or None
+    )
+    alert_mail_to: list[str] = field(
+        default_factory=lambda: [
+            a.strip() for a in (os.getenv("AIMON_ALERT_MAIL_TO") or "").replace(";", ",").split(",")
+            if a.strip()
+        ]
+    )
+    # Für die Links in der Benachrichtigung.
+    public_url: str = field(
+        default_factory=lambda: (os.getenv("AIMON_PUBLIC_URL") or "").rstrip("/")
+    )
 
     cors_origins: list[str] = field(
         default_factory=lambda: [

@@ -177,6 +177,12 @@ func setField(c *Config, key, val string) error {
 		c.DiscoveryEnabled = truthy(val)
 	case "ollama_probe":
 		c.OllamaProbe = truthy(val)
+	case "report_addresses":
+		c.ReportAddresses = truthy(val)
+	case "ssh_user":
+		c.SSHUser = val
+	case "ssh_port":
+		c.SSHPort = val
 	case "tap_listen":
 		c.TapListen = val
 	case "tap_upstream":

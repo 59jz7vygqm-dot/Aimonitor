@@ -6,7 +6,7 @@ import datetime as dt
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from ..auth import Principal, require_read
+from ..auth import Principal, require_admin, require_read
 from ..db import pool
 from ..diagnostics import prompt as prompt_mod
 from ..diagnostics import rules as rules_mod
@@ -50,6 +50,51 @@ async def evaluate_now(p: Principal = Depends(require_read)) -> dict:
     findings = await rules_mod.evaluate()
     res = await rules_mod.reconcile(findings)
     return {"findings": len(findings), **res}
+
+
+@router.get("/alerts")
+async def alerts_status(p: Principal = Depends(require_read)) -> dict:
+    """Was ist eingerichtet und was wurde zuletzt verschickt."""
+    from ..config import settings as cfg
+    from ..diagnostics import notify
+
+    async with pool().acquire() as conn:
+        recent = await conn.fetch(
+            """
+            SELECT a.id, a.kind, a.channel, a.sent_at, a.ok, a.error,
+                   a.subject, a.rule, i.title, i.severity
+            FROM alert_log a LEFT JOIN incidents i ON i.id = a.incident_id
+            ORDER BY a.sent_at DESC LIMIT 50
+            """
+        )
+        last_hour = await conn.fetchval(
+            "SELECT count(*) FROM alert_log WHERE ok "
+            "AND sent_at > now() - INTERVAL '1 hour'"
+        )
+    return {
+        "enabled": notify.enabled(),
+        "channels": notify.channels(),
+        "min_severity": cfg.alert_min_severity,
+        "min_duration_s": cfg.alert_min_duration_s,
+        "send_resolved": cfg.alert_send_resolved,
+        "max_per_hour": cfg.alert_max_per_hour,
+        "sent_last_hour": last_hour,
+        "stats": notify.stats(),
+        "recent": [dict(r) for r in recent],
+        "hinweis": "Benachrichtigt wird nur bei Incidents ab der Mindestschwere, "
+                   "die länger als min_duration_s offen sind – und höchstens "
+                   "einmal je Incident.",
+    }
+
+
+@router.post("/alerts/test")
+async def alerts_test(
+    channel: str | None = None, p: Principal = Depends(require_admin)
+) -> dict:
+    """Testnachricht verschicken, ohne auf einen echten Vorfall zu warten."""
+    from ..diagnostics import notify
+
+    return await notify.send_test(channel)
 
 
 @router.get("/events")

@@ -218,3 +218,75 @@ async def test_stale_node_wird_als_stumm_gemeldet_nicht_als_null(db):
     inc = f["node.stale"][0]
     assert inc.subject == "alt"
     assert "alt, nicht niedrig" in inc.context["bedeutung"]
+
+
+async def test_power_cap_unter_last_ist_keine_warnung(db):
+    """Eine L4 mit 70 von 72 W bei 100 % Auslastung arbeitet bestimmungsgemäß.
+    Als Warnung gemeldet würde das Dauerfeuer erzeugen."""
+    await write(db, {
+        "node": {"name": "ki"},
+        "samples": [
+            {"metric": "gpu.throttle_power", "value": 1, "labels": {"gpu": "0"}},
+            {"metric": "gpu.throttle_thermal", "value": 0, "labels": {"gpu": "0"}},
+            {"metric": "gpu.util_pct", "value": 100, "labels": {"gpu": "0"}},
+            {"metric": "gpu.power_w", "value": 70, "labels": {"gpu": "0"}},
+            {"metric": "gpu.power_limit_w", "value": 72, "labels": {"gpu": "0"}},
+            {"metric": "gpu.temp_c", "value": 59, "labels": {"gpu": "0"}},
+        ],
+    })
+    f = by_rule(await rules.evaluate())
+    assert "gpu.throttling" not in f
+    assert "gpu.power_cap_idle" not in f
+
+
+async def test_power_cap_im_leerlauf_wird_gemeldet(db):
+    """Greift das Limit, obwohl die Karte nichts tut, ist das erklärungsbedürftig."""
+    await write(db, {
+        "node": {"name": "spark01"},
+        "samples": [
+            {"metric": "gpu.throttle_power", "value": 1, "labels": {"gpu": "0"}},
+            {"metric": "gpu.util_pct", "value": 0, "labels": {"gpu": "0"}},
+            {"metric": "gpu.power_w", "value": 3, "labels": {"gpu": "0"}},
+            {"metric": "gpu.power_limit_w", "value": 72, "labels": {"gpu": "0"}},
+        ],
+    })
+    f = by_rule(await rules.evaluate())
+    inc = f["gpu.power_cap_idle"][0]
+    # Bei 3 von 72 W ist nichts am Limit – nur Info, keine Warnung.
+    assert inc.severity == "info"
+    assert inc.context["util_pct"] == 0
+    assert "zu_prüfen" in inc.context
+
+
+async def test_power_cap_am_limit_ohne_last_ist_warnung(db):
+    """Nahe am Limit bei fast keiner Last: da stimmt etwas nicht."""
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "gpu.throttle_power", "value": 1, "labels": {"gpu": "0"}},
+            {"metric": "gpu.util_pct", "value": 5, "labels": {"gpu": "0"}},
+            {"metric": "gpu.power_w", "value": 69, "labels": {"gpu": "0"}},
+            {"metric": "gpu.power_limit_w", "value": 72, "labels": {"gpu": "0"}},
+        ],
+    })
+    f = by_rule(await rules.evaluate())
+    assert f["gpu.power_cap_idle"][0].severity == "warning"
+
+
+async def test_thermisches_throttling_bleibt_warnung(db):
+    """Thermisch heißt: Kühlung reicht nicht. Das bleibt eine Warnung,
+    egal bei welcher Last."""
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "gpu.throttle_thermal", "value": 1, "labels": {"gpu": "0"}},
+            {"metric": "gpu.throttle_power", "value": 1, "labels": {"gpu": "0"}},
+            {"metric": "gpu.util_pct", "value": 100, "labels": {"gpu": "0"}},
+            {"metric": "gpu.temp_c", "value": 86, "labels": {"gpu": "0"}},
+        ],
+    })
+    f = by_rule(await rules.evaluate())
+    assert f["gpu.throttling"][0].severity == "warning"
+    assert "thermisch" in f["gpu.throttling"][0].title
+    # Das gleichzeitige Power-Cap unter Volllast taucht NICHT zusätzlich auf.
+    assert "gpu.power_cap_idle" not in f

@@ -85,3 +85,33 @@ def test_fehlende_werte_bleiben_sichtbar_fehlend():
     assert _fmt(None) == "—"
     assert _fmt(0) == "0"
     assert _fmt(0.0) == "0"
+
+
+# ------------------------------------------------------------------ Zugang
+
+def test_ssh_befehl_aus_labels():
+    from aimon.diagnostics.prompt import ssh_command
+
+    assert ssh_command({"ip": "10.0.0.5"}, "ki") == "ssh 10.0.0.5"
+    assert ssh_command({"ip": "10.0.0.5", "ssh_user": "kvkh"}, "ki") == \
+        "ssh kvkh@10.0.0.5"
+    assert ssh_command({"ip": "10.0.0.5", "ssh_user": "kvkh", "ssh_port": "2222"},
+                       "ki") == "ssh -p 2222 kvkh@10.0.0.5"
+    # Port 22 steht nicht im Befehl, das ist der Standard.
+    assert ssh_command({"ip": "10.0.0.5", "ssh_port": "22"}, "ki") == "ssh 10.0.0.5"
+
+
+def test_ssh_befehl_ohne_gemeldete_adresse():
+    """Ohne IP den Node-Namen nehmen - der ist oft im DNS auflösbar."""
+    from aimon.diagnostics.prompt import ssh_command
+
+    assert ssh_command({}, "gpu-vm-01") == "ssh gpu-vm-01"
+    assert ssh_command(None, "gpu-vm-01") == "ssh gpu-vm-01"
+    assert ssh_command({}, "") == ""
+
+
+def test_ssh_befehl_mit_ipv6():
+    from aimon.diagnostics.prompt import ssh_command
+
+    assert ssh_command({"ip": "2001:db8::1", "ssh_user": "x"}, "n") == \
+        "ssh x@[2001:db8::1]"
