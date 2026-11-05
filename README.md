@@ -175,7 +175,34 @@ Dienste auf anderen Ports, Labels oder Peer-Probes gehören in
 [`deploy/agent/agent.example.yaml`](deploy/agent/agent.example.yaml). Nach
 Änderungen: `sudo systemctl restart aimon-agent`.
 
-### 5. Echte TTFT messen (optional, aber der eigentliche Punkt)
+### 5. vLLM richtig starten
+
+Zwei Schalter, die leicht verwechselt werden — sie tun Verschiedenes:
+
+| Schalter | Wirkt auf | Default |
+|---|---|---|
+| `--disable-log-stats` | Schaltet `/metrics` **ab**. Dieses Flag also **weglassen**. | Statistik ist an |
+| `--enable-force-include-usage` | Legt das `usage`-Objekt auch in den **gestreamten** Antwortstrom. Nur damit kann `aimon-tap` Tokens zählen. | aus |
+
+```bash
+vllm serve <modell> --enable-force-include-usage
+```
+
+Ohne das erste bleiben TTFT-Histogramme, KV-Cache, Warteschlange, Preemptions
+und Durchsatz leer, und das Dashboard meldet `llm.no_metrics`. Prüfen:
+
+```bash
+curl -s localhost:8000/metrics | grep -c '^vllm:'
+```
+
+Ohne das zweite misst `aimon-tap` TTFT und Dauer weiterhin exakt, kann aber
+nur **Zeichen** statt Tokens zählen — die Prompt-Länge im Dashboard wäre dann
+eine Zeichenzahl, die wie eine Tokenzahl aussieht. Der Tap merkt das und sagt
+es einmalig als Hinweis `tap.no_token_counts`. Alternativ setzt der Client pro
+Anfrage `stream_options: {"include_usage": true}`; OpenWebUI tut das nicht von
+sich aus, deshalb ist der Serverschalter der einfachere Weg.
+
+### 6. Echte TTFT messen (optional, aber der eigentliche Punkt)
 
 vLLM liefert nur Histogramme, Ollama gar nichts. Wer TTFT **pro Request** und
 **pro Modell** will, hängt `aimon-tap` zwischen OpenWebUI und das Backend:
@@ -192,7 +219,7 @@ ohne Pufferung — er misst mit, er greift nicht ein.
 Ohne Tap funktioniert alles andere weiter; die UI sagt dann ausdrücklich, dass
 die TTFT-Werte aus Histogrammen interpoliert sind.
 
-### 6. Die beiden KI-gebauten Proxies anbinden
+### 7. Die beiden KI-gebauten Proxies anbinden
 
 Für den OpenTerminal-Autoscaler und den SearXNG-Privacy-Proxy liegen fertige
 Prompts bereit, die man dem Modell vorlegt, das sie gebaut hat:

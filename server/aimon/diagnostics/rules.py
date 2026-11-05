@@ -618,7 +618,9 @@ async def _rule_no_llm_data(conn) -> list[Finding]:
                 "bedeutung": "Der Dienst antwortet auf Health-Checks, aber es kommen "
                              "weder TTFT-Daten noch vLLM-Zähler an.",
                 "zu_prüfen": [
-                    "vLLM: ist /metrics erreichbar und nicht durch --disable-log-stats aus?",
+                    "vLLM: /metrics erreichbar? Nicht mit --disable-log-stats "
+                    "gestartet? (Der Schalter --enable-force-include-usage "
+                    "ist ein anderer – der betrifft nur aimon-tap.)",
                     "Ollama: hat keinen Metrik-Endpunkt. TTFT gibt es nur über aimon-tap.",
                     "Läuft überhaupt Last auf dem Dienst?",
                 ],

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -15,14 +16,22 @@ import (
 )
 
 type memSink struct {
-	mu   sync.Mutex
-	reqs []model.Request
+	mu     sync.Mutex
+	reqs   []model.Request
+	events []model.Event
 }
 
 func (m *memSink) Enqueue(_ context.Context, b model.Batch) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reqs = append(m.reqs, b.Requests...)
+	m.events = append(m.events, b.Events...)
+}
+
+func (m *memSink) allEvents() []model.Event {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]model.Event(nil), m.events...)
 }
 
 func (m *memSink) all() []model.Request {
@@ -297,5 +306,103 @@ func TestTapRecordsUpstreamFailure(t *testing.T) {
 	}
 	if reqs[0].Error == "" {
 		t.Error("Error-Feld sollte gefüllt sein")
+	}
+}
+
+// Backend, das streamt, aber kein usage-Objekt mitschickt - das Verhalten
+// von vLLM ohne --enable-force-include-usage.
+func streamingOhneUsage() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		fl, _ := w.(http.Flusher)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")
+		if fl != nil {
+			fl.Flush()
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if fl != nil {
+			fl.Flush()
+		}
+	}))
+}
+
+func sendeStream(t *testing.T, url string, n int) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"model": "m", "stream": true,
+		"messages": []map[string]string{{"role": "user", "content": "hallo"}},
+	})
+	for i := 0; i < n; i++ {
+		resp, err := http.Post(url+"/v1/chat/completions", "application/json",
+			bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+func TestTapMeldetFehlendeTokenzahlen(t *testing.T) {
+	backend := streamingOhneUsage()
+	defer backend.Close()
+	sink := &memSink{}
+	tp, _ := New(backend.URL, "vllm@test:8000", "n", sink)
+	front := httptest.NewServer(tp)
+	defer front.Close()
+
+	sendeStream(t, front.URL, 25)
+	reqs := waitForRequests(t, tp, sink, 25)
+
+	// TTFT und Dauer werden weiter exakt gemessen – nur die Tokenzahlen fehlen.
+	for _, r := range reqs {
+		if r.TTFTMs == nil {
+			t.Fatal("TTFT muss auch ohne usage gemessen werden")
+		}
+		if r.PromptTokens != nil {
+			t.Fatal("ohne usage darf keine Tokenzahl erfunden werden")
+		}
+		if r.PromptChars == nil || *r.PromptChars != len("hallo") {
+			t.Errorf("PromptChars = %v – der Zeichen-Ersatz fehlt", r.PromptChars)
+		}
+	}
+
+	// Genau ein erklärender Hinweis, nicht einer pro Request.
+	evs := sink.allEvents()
+	if len(evs) != 1 {
+		t.Fatalf("erwartet genau 1 Hinweis, bekommen %d", len(evs))
+	}
+	if evs[0].Kind != "tap.no_token_counts" {
+		t.Errorf("Kind = %q", evs[0].Kind)
+	}
+	if d, _ := evs[0].Detail["abhilfe_vllm"].(string); d == "" ||
+		!bytes.Contains([]byte(d), []byte("--enable-force-include-usage")) {
+		t.Errorf("Der Hinweis muss den Schalter nennen: %v", evs[0].Detail)
+	}
+
+	// Und auch bei weiterem Verkehr nicht erneut.
+	sendeStream(t, front.URL, 10)
+	waitForRequests(t, tp, sink, 35)
+	if n := len(sink.allEvents()); n != 1 {
+		t.Errorf("Hinweis wurde %d-mal geschickt", n)
+	}
+}
+
+func TestTapSchweigtWennTokenzahlenKommen(t *testing.T) {
+	backend := fakeStreamingBackend(5 * time.Millisecond)
+	defer backend.Close()
+	sink := &memSink{}
+	tp, _ := New(backend.URL, "vllm@test:8000", "n", sink)
+	front := httptest.NewServer(tp)
+	defer front.Close()
+
+	sendeStream(t, front.URL, 25)
+	reqs := waitForRequests(t, tp, sink, 25)
+	if reqs[0].PromptTokens == nil {
+		t.Fatal("mit usage müssen Tokenzahlen ankommen")
+	}
+	if n := len(sink.allEvents()); n != 0 {
+		t.Errorf("kein Hinweis nötig, es kamen aber %d", n)
 	}
 }

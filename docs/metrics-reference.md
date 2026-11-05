@@ -106,6 +106,14 @@ Abgeleitet vom Server:
 `ollama.model_expires_in_s`, `ollama.model_context_len`, `ollama.probe_ttft_ms`
 (synthetischer Canary-Request, Label `model`), `ollama.probe_ok`.
 
+> **Zwei Schalter bei vLLM, die Verschiedenes tun.** `--disable-log-stats`
+> schaltet `/metrics` ab und damit alles in dieser Tabelle — das Flag gehört
+> weggelassen. `--enable-force-include-usage` legt das `usage`-Objekt in den
+> gestreamten Antwortstrom; nur damit kann `aimon-tap` Tokens statt Zeichen
+> zählen. Fehlt es, misst der Tap TTFT und Dauer weiter exakt, meldet aber
+> `prompt_chars` statt `prompt_tokens` und schickt einmalig den Hinweis
+> `tap.no_token_counts`.
+
 > Ollama hat keinen Metrik-Endpunkt. Echte TTFT pro Benutzer-Request gibt es nur über
 > `aimon-tap`. Ohne Tap liefert der Agent `ollama.probe_ttft_ms` aus einem eigenen
 > 1-Token-Request — das ist eine Messung der Bereitschaft des Modells, **nicht** der

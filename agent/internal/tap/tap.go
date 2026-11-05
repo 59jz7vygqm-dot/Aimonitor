@@ -46,6 +46,14 @@ type Tap struct {
 
 	mu      sync.Mutex
 	pending []model.Request
+	events  []model.Event
+
+	// Zählt gestreamte Requests, bei denen das Backend keine Tokenzahlen
+	// mitgeschickt hat. Ohne die kann der Tap nur Zeichen zählen - ein
+	// stiller Qualitätsverlust, der sonst niemandem auffällt.
+	streamed        int
+	streamedNoUsage int
+	usageWarned     bool
 }
 
 func New(upstream, serviceKey, nodeName string, sink Sink) (*Tap, error) {
@@ -158,6 +166,39 @@ func (t *Tap) record(r model.Request) {
 	t.mu.Lock()
 	t.pending = append(t.pending, r)
 	n := len(t.pending)
+
+	// Fehlende Tokenzahlen bei Streaming einmalig erklären. vLLM schickt das
+	// usage-Objekt im Stream nur, wenn es dazu angewiesen wurde - sonst
+	// stehen im Dashboard Zeichen statt Tokens, und man hält die Zahl für
+	// eine Tokenzahl.
+	if r.Stream && r.Status < 400 {
+		t.streamed++
+		if r.PromptTokens == nil {
+			t.streamedNoUsage++
+		}
+		if !t.usageWarned && t.streamed >= 20 && t.streamedNoUsage == t.streamed {
+			t.usageWarned = true
+			t.events = append(t.events, model.Event{
+				Kind:     "tap.no_token_counts",
+				Severity: "info",
+				Title:    "Backend schickt beim Streaming keine Tokenzahlen",
+				TS:       float64(time.Now().UnixNano()) / 1e9,
+				Service:  t.ServiceKey,
+				Detail: map[string]any{
+					"gestreamte_requests": t.streamed,
+					"bedeutung": "Der Tap misst TTFT und Dauer exakt, kann " +
+						"aber nur Zeichen statt Tokens zählen. Prompt-Längen " +
+						"im Dashboard sind dann Zeichen, keine Tokens.",
+					"abhilfe_vllm": "vLLM mit --enable-force-include-usage " +
+						"starten; dann liegt das usage-Objekt auch im " +
+						"gestreamten Antwortstrom.",
+					"abhilfe_client": "Oder der Client setzt pro Anfrage " +
+						"stream_options: {\"include_usage\": true}.",
+				},
+				DedupKey: "tap.no_token_counts:" + t.ServiceKey,
+			})
+		}
+	}
 	t.mu.Unlock()
 	if n >= 50 {
 		t.Flush(context.Background())
@@ -167,17 +208,20 @@ func (t *Tap) record(r model.Request) {
 // Flush gibt die gesammelten Requests an den Shipper weiter.
 func (t *Tap) Flush(ctx context.Context) {
 	t.mu.Lock()
-	if len(t.pending) == 0 {
+	if len(t.pending) == 0 && len(t.events) == 0 {
 		t.mu.Unlock()
 		return
 	}
 	reqs := t.pending
+	evs := t.events
 	t.pending = nil
+	t.events = nil
 	t.mu.Unlock()
 
 	t.Sink.Enqueue(ctx, model.Batch{
 		Node:     model.Node{Name: t.NodeName},
 		Requests: reqs,
+		Events:   evs,
 	})
 }
 
