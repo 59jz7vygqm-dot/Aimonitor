@@ -225,7 +225,10 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 
 /* ----------------------------------------------------------------- Cards */
 
-.grid { display: grid; gap: 14px; }
+/* align-items: start, damit eine kurze Karte nicht auf die Höhe der
+   längsten in derselben Zeile gezogen wird - sonst steht neben einer
+   Maschine mit fünf GPUs eine halbe Seite Weiß. */
+.grid { display: grid; gap: 14px; align-items: start; }
 .grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .grid.tiles { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }

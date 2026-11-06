@@ -158,6 +158,22 @@ async def test_headroom_regel(db):
     assert f["openterminal.headroom_low"][0].context["instances_max"] == 12
 
 
+async def test_blockrate_bei_winziger_stichprobe_ist_keine_warnung(db):
+    """Bei drei Suchanfragen sind 33 % eine einzige geblockte. Daraus eine
+    Warnung zu machen hieße, bei jedem Neustart des Proxys Alarm zu schlagen."""
+    await write(db, {
+        "node": {"name": "n"},
+        "services": [{"key": "pp@n:8888", "kind": "privacy_proxy"}],
+        "samples": [
+            {"metric": "privacy.block_rate_pct", "value": 33.3, "service": "pp@n:8888"},
+            {"metric": "privacy.requests_total", "value": 3, "service": "pp@n:8888"},
+            {"metric": "privacy.blocked_total", "value": 1, "service": "pp@n:8888",
+             "labels": {"category": "_all"}},
+        ],
+    })
+    assert "privacy.block_rate_high" not in by_rule(await rules.evaluate())
+
+
 async def test_blockrate_regel_liefert_kategorien(db):
     await write(db, {
         "node": {"name": "n"},
@@ -174,6 +190,7 @@ async def test_blockrate_regel_liefert_kategorien(db):
     f = by_rule(await rules.evaluate())
     ctx = f["privacy.block_rate_high"][0].context
     assert ctx["blocked_by_category"]["person_name"] == 460
+    assert ctx["stichprobe"] == 1000
     # Die Regel muss sagen, wie man False Positives von echten Treffern trennt.
     assert "deutung" in ctx
 
@@ -327,3 +344,29 @@ async def test_eigene_tokens_erzeugen_keinen_incident(db):
                     token_name=token,
                 )
     assert "token.shared" not in by_rule(await rules.evaluate())
+
+
+async def test_ollama_ohne_metriken_ist_kein_incident(db):
+    """Ollama hat keinen Metrik-Endpunkt. Das ist eine Eigenschaft, kein
+    Fehlzustand – ein Incident dafür löst sich nie auf."""
+    await write(db, {
+        "node": {"name": "ki"},
+        "services": [{"key": "ollama@ki:11434", "kind": "ollama"}],
+        "samples": [{"metric": "host.cpu_pct", "value": 5}],
+    })
+    assert "llm.no_metrics" not in by_rule(await rules.evaluate())
+
+
+async def test_vllm_ohne_metriken_bleibt_ein_hinweis(db):
+    """Bei vLLM ist es dagegen behebbar – und der Hinweis nennt wie."""
+    await write(db, {
+        "node": {"name": "ki"},
+        "services": [{"key": "vllm@ki:8000", "kind": "vllm"}],
+        "samples": [{"metric": "host.cpu_pct", "value": 5}],
+    })
+    inc = by_rule(await rules.evaluate())["llm.no_metrics"][0]
+    assert inc.severity == "info"
+    hinweise = " ".join(inc.context["zu_prüfen"])
+    assert "--disable-log-stats" in hinweise
+    # Die beiden Schalter dürfen nicht verwechselt werden.
+    assert "--enable-force-include-usage" in hinweise

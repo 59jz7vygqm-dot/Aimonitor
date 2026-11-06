@@ -506,7 +506,13 @@ async def _rule_privacy(conn) -> list[Finding]:
     out = []
     for svc, m in per.items():
         br = m.get("privacy.block_rate_pct")
-        if br is not None and br >= settings.block_rate_warn_pct:
+        total = m.get("privacy.requests_total") or 0
+        # Eine Quote ohne Stichprobe ist keine Aussage: bei drei Suchanfragen
+        # sind 33 % eine einzige geblockte. Daraus eine Warnung zu machen
+        # heißt, bei jedem Neustart des Proxys Alarm zu schlagen.
+        if (br is not None
+                and br >= settings.block_rate_warn_pct
+                and total >= settings.block_rate_min_requests):
             cats = {
                 k.split("#", 1)[1]: v
                 for k, v in m.items() if k.startswith("privacy.blocked_total#")
@@ -518,6 +524,7 @@ async def _rule_privacy(conn) -> list[Finding]:
                     {
                         "block_rate_pct": round(br, 1),
                         "warn_pct": settings.block_rate_warn_pct,
+                        "stichprobe": int(total),
                         "blocked_by_category": cats,
                         "requests_total": m.get("privacy.requests_total"),
                         "deutung": "Entweder ein Filter ist zu scharf (False Positives) "
@@ -598,7 +605,7 @@ async def _rule_no_llm_data(conn) -> list[Finding]:
     rows = await conn.fetch(
         """
         SELECT s.key, s.kind FROM services s
-        WHERE s.kind IN ('vllm','ollama')
+        WHERE s.kind = 'vllm'
           AND s.last_seen > now() - INTERVAL '10 minutes'
           AND NOT EXISTS (
               SELECT 1 FROM requests r WHERE r.service_id = s.id
@@ -609,20 +616,25 @@ async def _rule_no_llm_data(conn) -> list[Finding]:
                 AND l.ts > now() - INTERVAL '10 minutes')
         """
     )
+    # Ollama ist hier bewusst ausgenommen: es hat schlicht keinen
+    # Metrik-Endpunkt. Das ist eine Eigenschaft, kein Fehlzustand, und ein
+    # Incident, der sich nie auflöst, ist Inventar statt Information. Der
+    # Weg zu TTFT-Daten für Ollama steht im Inference-Bereich des Dashboards.
     return [
         Finding(
             "llm.no_metrics", "info", "service", r["key"],
             f"{r['key']} läuft, liefert aber keine Inference-Metriken",
             {
                 "kind": r["kind"],
-                "bedeutung": "Der Dienst antwortet auf Health-Checks, aber es kommen "
-                             "weder TTFT-Daten noch vLLM-Zähler an.",
+                "bedeutung": "vLLM antwortet auf Health-Checks, aber unter "
+                             "/metrics kommt nichts an.",
                 "zu_prüfen": [
-                    "vLLM: /metrics erreichbar? Nicht mit --disable-log-stats "
-                    "gestartet? (Der Schalter --enable-force-include-usage "
-                    "ist ein anderer – der betrifft nur aimon-tap.)",
-                    "Ollama: hat keinen Metrik-Endpunkt. TTFT gibt es nur über aimon-tap.",
-                    "Läuft überhaupt Last auf dem Dienst?",
+                    "Ist /metrics erreichbar? "
+                    "curl -s localhost:8000/metrics | grep -c '^vllm:'",
+                    "Wurde vLLM mit --disable-log-stats gestartet? Dann das "
+                    "Flag weglassen. (--enable-force-include-usage ist ein "
+                    "anderer Schalter, der betrifft nur aimon-tap.)",
+                    "Erreicht der Agent den Port? aimon-agent check",
                 ],
             },
         )

@@ -128,6 +128,10 @@ class Settings:
     headroom_crit_pct: float = field(default_factory=lambda: _f("AIMON_HEADROOM_CRIT_PCT", 5.0))
     disk_warn_pct: float = field(default_factory=lambda: _f("AIMON_DISK_WARN_PCT", 88.0))
     block_rate_warn_pct: float = field(default_factory=lambda: _f("AIMON_BLOCK_RATE_WARN_PCT", 25.0))
+    # Unterhalb dieser Zahl von Anfragen ist eine Blockquote keine Aussage.
+    block_rate_min_requests: int = field(
+        default_factory=lambda: _i("AIMON_BLOCK_RATE_MIN_REQUESTS", 50)
+    )
 
     # ------------------------------------------------------------ Alerting
     #

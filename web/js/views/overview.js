@@ -187,8 +187,16 @@ function summaryTiles(ov, open) {
     const blocked = ov.privacy?.events_1h?.['privacy.blocked']?.occurrences ?? 0;
     const rate = (ov.privacy?.latest || []).find(
         (r) => r.metric === 'privacy.block_rate_pct');
+    const totalReqs = (ov.privacy?.latest || []).find(
+        (r) => r.metric === 'privacy.requests_total');
+    // Die Kachel zählt die letzte Stunde, die Quote läuft seit Start des
+    // Proxys. Ohne diesen Zusatz sieht "0 geblockt, 33 % Blockrate" wie ein
+    // Widerspruch aus.
     t.appendChild(tile('Geblockte Suchen (1 h)', `${blocked}`,
-        rate ? `Blockrate ${pct(rate.value, 1)}` : 'Privacy-Proxy meldet nichts'));
+        rate
+            ? `Blockrate seit Proxy-Start ${pct(rate.value, 1)}`
+              + (totalReqs ? ` von ${fmtNum(totalReqs.value, 0)} Anfragen` : '')
+            : 'Privacy-Proxy meldet nichts'));
 
     return t;
 }
@@ -212,6 +220,14 @@ function thermalNote(gpus) {
 
 function machineCard(n, gpus, incByNode, trends, ov) {
     const incidents = incByNode.get(n.name) || [];
+    const host = (ov.hosts || {})[n.name] || {};
+    // Ein Host, den nur ein Dienst benannt hat (der Privacy-Proxy meldet
+    // node.name, läuft aber ohne Agent), ist keine überwachte Maschine mit
+    // fehlenden Werten. Ihn wie eine darzustellen sieht nach Ausfall aus.
+    const hasAgent = Boolean(n.agent_version);
+    if (!hasAgent && !gpus.length && host.cpu_pct == null) {
+        return serviceHostCard(n, ov, incidents);
+    }
     const worst = worstSeverity(incidents);
     const offline = n.age_s > 600;
     const stale = n.age_s > 90;
@@ -244,7 +260,6 @@ function machineCard(n, gpus, incByNode, trends, ov) {
         .filter(([k]) => !['ip', 'ips', 'ssh_user', 'ssh_port',
             'installed_by'].includes(k))
         .map(([k, v]) => `${k}=${v}`);
-    const host = (ov.hosts || {})[n.name] || {};
     const meta = h(`<div class="facts" style="padding:6px 0 4px">
         ${n.agent_version ? `<span class="fact">Agent <b>${
             escapeHtml(n.agent_version)}</b></span>` : ''}
@@ -519,12 +534,16 @@ function incidentList(open) {
 
 export function sshCommand(node) {
     const l = node.labels || {};
-    let host = l.ip || node.hostname || node.name;
+    // Nur was der Agent wirklich gemeldet hat. Den Node-Namen als Adresse
+    // auszugeben wäre geraten - bei Hosts, die nur ein Dienst benannt hat,
+    // ist er oft gar nicht auflösbar.
+    const host = l.ip || node.hostname;
     if (!host) return '';
-    if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
+    const addr = host.includes(':') && !host.startsWith('[')
+        ? `[${host}]` : host;
     const parts = ['ssh'];
     if (l.ssh_port && l.ssh_port !== '22') parts.push('-p', l.ssh_port);
-    parts.push(l.ssh_user ? `${l.ssh_user}@${host}` : host);
+    parts.push(l.ssh_user ? `${l.ssh_user}@${addr}` : addr);
     return parts.join(' ');
 }
 
@@ -659,4 +678,40 @@ function kindColor(kind) {
         comfyui: 'var(--series-5)', searxng: 'var(--series-6)',
         openterminal_proxy: 'var(--series-7)', tap: 'var(--series-8)',
     }[kind] || 'var(--axis)';
+}
+
+
+/* Karte für einen Host, von dem nur ein Dienst weiß.
+ *
+ * Diese Einträge entstehen, wenn ein Proxy seinen Standort meldet, dort aber
+ * kein Agent läuft. Sie als Maschine ohne Werte zu zeigen wäre irreführend -
+ * es fehlt nichts, es wird dort schlicht nichts gemessen.
+ */
+function serviceHostCard(n, ov, incidents) {
+    const svcs = (ov.services_by_node || {})[n.name] || [];
+    const el = h(`<section class="machine">
+        <div class="machine-head">
+          <div><div class="name">${escapeHtml(n.name)}</div></div>
+          <div class="spacer"></div>
+          <div><span class="status muted"><span class="ico"
+            aria-hidden="true">○</span>kein Agent</span></div>
+        </div>
+        <div class="machine-body">
+          <div class="svc-chips" style="padding-top:8px">${svcs.map((x) =>
+        `<span class="svc-chip ${x.status === 'online' ? '' : 'down'}"
+            title="${escapeHtml(x.key)}">
+           <span class="dot" style="background:${kindColor(x.kind)}"></span>
+           ${escapeHtml(kindLabel(x.kind))}</span>`).join('')}</div>
+          <div class="source-note" style="padding-bottom:6px">
+            Nur von einem Dienst gemeldet. Für CPU, RAM und Platte dieser
+            Maschine dort <code>aimon-agent</code> installieren.
+          </div>
+          ${incidents.length ? incidents.slice(0, 3).map((i) =>
+        `<div style="font-size:11.5px;margin-top:3px">${
+            statusHtml(sevLevel(i.severity), sevText(i.severity))}
+           <span style="color:var(--text-secondary)">${
+            escapeHtml(i.title)}</span></div>`).join('') : ''}
+        </div>
+      </section>`);
+    return el;
 }
