@@ -88,25 +88,61 @@ test-py:
 	cd server && python -m pytest -q
 
 # ------------------------------------------------------------------ Betrieb
+AIMON_URL ?= http://localhost:8420
+
 .PHONY: up
 up:
 	cd deploy && AIMON_BUILD=$(BUILD) docker compose up -d --build --force-recreate
+	@echo ""
+	@printf 'Warte auf den Server '
+	@for i in $$(seq 1 45); do \
+		if curl -fsS --max-time 2 "$(AIMON_URL)/api/v1/health" >/dev/null 2>&1; then \
+			echo " bereit."; break; \
+		fi; \
+		printf '.'; sleep 2; \
+		if [ $$i -eq 45 ]; then \
+			echo ""; \
+			echo "Der Server antwortet nach 90 s nicht. Logs ansehen:"; \
+			echo "  cd deploy && docker compose logs --tail=50 server"; \
+		fi; \
+	done
 	@echo ""
 	@$(MAKE) --no-print-directory version
 
 # Vergleicht den Stand im Arbeitsverzeichnis mit dem, was tatsächlich läuft.
 # Gedacht für die Frage "warum sehe ich meine Änderung nicht".
+#
+# Bewusst ohne python und ohne Pipe-Akrobatik: dieses Ziel wird genau dann
+# aufgerufen, wenn etwas nicht stimmt - dann darf es nicht selbst mit einem
+# Traceback aussteigen.
 .PHONY: version
 version:
 	@echo "Arbeitsverzeichnis: $(VERSION)+$(BUILD)"
-	@printf 'Server:             '
-	@curl -fsS --max-time 5 "$${AIMON_URL:-http://localhost:8420}/api/v1/health" \
-		2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); \
-print(d.get("version","?") + "+" + d.get("build","?"))' \
-		|| echo "nicht erreichbar"
-	@echo ""
-	@echo "Stimmen die beiden nicht überein, läuft ein alter Container:"
-	@echo "  git pull && make up"
+	@body="$$(curl -fsS --max-time 5 "$(AIMON_URL)/api/v1/health" 2>/dev/null || true)"; \
+	if [ -z "$$body" ]; then \
+		echo "Server:             nicht erreichbar ($(AIMON_URL))"; \
+		echo ""; \
+		echo "Läuft der Container? cd deploy && docker compose ps"; \
+		exit 0; \
+	fi; \
+	ver="$$(printf '%s' "$$body" \
+		| sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"; \
+	bld="$$(printf '%s' "$$body" \
+		| sed -n 's/.*"build"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"; \
+	[ -n "$$ver" ] || ver="?"; \
+	[ -n "$$bld" ] || bld="unbekannt"; \
+	echo "Server:             $$ver+$$bld"; \
+	echo ""; \
+	if [ "$$ver+$$bld" = "$(VERSION)+$(BUILD)" ]; then \
+		echo "Stimmt überein."; \
+	elif [ "$$bld" = "unbekannt" ]; then \
+		echo "Der Server kennt seinen Stand nicht – mit 'docker compose up --build'"; \
+		echo "statt 'make up' gebaut. Noch einmal mit:"; \
+		echo "  make up"; \
+	else \
+		echo "Es läuft ein anderer Stand als hier im Verzeichnis:"; \
+		echo "  git pull && make up"; \
+	fi
 
 .PHONY: down
 down:
