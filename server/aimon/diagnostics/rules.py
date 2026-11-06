@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -586,6 +587,131 @@ async def _rule_probes(conn) -> list[Finding]:
     return out
 
 
+async def _rule_canary(conn) -> list[Finding]:
+    """Der Ende-zu-Ende-Check.
+
+    Hier steht die einzige Aussage im ganzen Regelwerk, die wirklich
+    „es funktioniert" bedeutet. Alle anderen Regeln melden Eigenschaften;
+    diese melden, dass ein echter Request keine Antwort bekommen hat.
+
+    Drei Zustaende werden unterschieden, weil sie verschiedene Dinge heißen:
+    gerade kaputt, in letzter Zeit unzuverlässig, und langsam.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT sv.key AS svc, COALESCE(sv.name, sv.key) AS label,
+               s.metric, l.value, l.ts
+        FROM series s
+        JOIN series_last l ON l.series_id = s.id
+        JOIN services sv ON sv.id = s.service_id
+        WHERE s.metric IN ('canary.ok', 'canary.ttft_ms')
+          AND sv.kind = 'canary'
+        """
+    )
+    if not rows:
+        return []
+
+    per: dict[str, dict] = {}
+    for r in rows:
+        d = per.setdefault(r["svc"], {"label": r["label"]})
+        d[r["metric"]] = r["value"]
+        if r["metric"] == "canary.ok":
+            d["ts"] = r["ts"]
+
+    # Wie oft ging es in der letzten Stunde schief? Ein Dienst, der jede
+    # dritte Anfrage verliert, ist nicht gesund, auch wenn der letzte
+    # Versuch geklappt hat – und genau das sieht man sonst nirgends.
+    hist = {
+        r["svc"]: (r["n"], r["bad"])
+        for r in await conn.fetch(
+            """
+            SELECT sv.key AS svc, count(*) AS n,
+                   count(*) FILTER (WHERE sm.value = 0) AS bad
+            FROM samples sm
+            JOIN series s ON s.id = sm.series_id
+            JOIN services sv ON sv.id = s.service_id
+            WHERE s.metric = 'canary.ok' AND sv.kind = 'canary'
+              AND sm.ts > now() - INTERVAL '1 hour'
+            GROUP BY sv.key
+            """
+        )
+    }
+
+    fehler = {
+        r["svc"]: r
+        for r in await conn.fetch(
+            """
+            SELECT DISTINCT ON (sv.key) sv.key AS svc, e.detail, e.ts
+            FROM events e JOIN services sv ON sv.id = e.service_id
+            WHERE e.kind = 'canary.failed'
+              AND e.ts > now() - INTERVAL '1 hour'
+            ORDER BY sv.key, e.ts DESC
+            """
+        )
+    }
+
+    out: list[Finding] = []
+    for svc, d in per.items():
+        ok = d.get("canary.ok")
+        if ok is None:
+            continue
+        n, bad = hist.get(svc, (0, 0))
+        ctx: dict[str, Any] = {
+            "versuche_1h": n,
+            "fehlgeschlagen_1h": bad,
+            "zuletzt": d["ts"].isoformat() if d.get("ts") else None,
+            "was_gemessen_wird": "Ein echter Chat-Request über denselben Weg, "
+                                 "den ein Benutzer nimmt – keine Health-Route.",
+        }
+        ev = fehler.get(svc)
+        if ev is not None:
+            detail = ev["detail"]
+            if isinstance(detail, str):
+                try:
+                    detail = json.loads(detail)
+                except ValueError:
+                    detail = {}
+            ctx["letzter_fehler"] = (detail or {}).get("fehler")
+            ctx["ziel"] = (detail or {}).get("url")
+            ctx["modell"] = (detail or {}).get("modell")
+
+        if ok == 0:
+            out.append(
+                Finding(
+                    "canary.failing", "critical", "service", svc,
+                    f"{d['label']}: ein echter Chat-Request kommt nicht durch",
+                    ctx | {"bedeutung": "Nicht ein Messwert ist auffällig – es "
+                                        "kommt keine Antwort. Benutzer merken das."},
+                )
+            )
+            continue
+
+        if n >= 4 and bad:
+            quote = bad / n * 100.0
+            out.append(
+                Finding(
+                    "canary.flaky", "warning", "service", svc,
+                    f"{d['label']}: {bad} von {n} Versuchen in der letzten "
+                    f"Stunde fehlgeschlagen ({quote:.0f} %)",
+                    ctx | {"bedeutung": "Der letzte Versuch hat geklappt. Ein Teil "
+                                        "der Benutzer bekommt trotzdem Fehler."},
+                )
+            )
+
+        ttft = d.get("canary.ttft_ms")
+        if ttft is not None and ttft >= settings.canary_ttft_warn_ms:
+            out.append(
+                Finding(
+                    "canary.slow", "warning", "service", svc,
+                    f"{d['label']}: {ttft / 1000:.1f} s bis zum ersten Token",
+                    ctx | {"ttft_ms": round(ttft), "warn_ms": settings.canary_ttft_warn_ms,
+                           "bedeutung": "Gemessen an einer winzigen Anfrage. Unter "
+                                        "echter Last ist es eher mehr, nicht weniger."},
+                )
+            )
+    return out
+
+
 async def _rule_openterminal(conn) -> list[Finding]:
     rows = await conn.fetch(
         """
@@ -864,6 +990,7 @@ RULES = (
     _rule_cpu_temp,
     _rule_llm,
     _rule_probes,
+    _rule_canary,
     _rule_openterminal,
     _rule_privacy,
     _rule_comfy,

@@ -26,6 +26,7 @@ SERVICE_KINDS = {
     "openterminal_proxy",
     "openterminal_instance",
     "tap",
+    "canary",
     "other",
 }
 

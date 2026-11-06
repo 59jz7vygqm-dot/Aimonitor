@@ -277,6 +277,35 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
             """,
             m5,
         )
+        canary_rows = await conn.fetch(
+            """
+            SELECT sv.key, COALESCE(sv.name, sv.key) AS label, sv.labels,
+                   max(l.ts) FILTER (WHERE s.metric = 'canary.ok') AS ts,
+                   max(l.value) FILTER (WHERE s.metric = 'canary.ok') AS ok,
+                   max(l.value) FILTER (WHERE s.metric = 'canary.ttft_ms') AS ttft_ms,
+                   max(l.value) FILTER (WHERE s.metric = 'canary.total_ms') AS total_ms
+            FROM services sv
+            JOIN series s ON s.service_id = sv.id
+            JOIN series_last l ON l.series_id = s.id
+            WHERE sv.kind = 'canary'
+            GROUP BY sv.key, label, sv.labels
+            ORDER BY sv.key
+            """
+        )
+        canary_hist = {
+            r["key"]: (r["n"], r["bad"])
+            for r in await conn.fetch(
+                """
+                SELECT sv.key, count(*) AS n, count(*) FILTER (WHERE sm.value = 0) AS bad
+                FROM samples sm
+                JOIN series s ON s.id = sm.series_id
+                JOIN services sv ON sv.id = s.service_id
+                WHERE s.metric = 'canary.ok' AND sv.kind = 'canary'
+                  AND sm.ts > now() - INTERVAL '1 hour'
+                GROUP BY sv.key
+                """
+            )
+        }
 
     def pack(rows, key="service") -> dict[str, dict]:
         out: dict[str, dict] = {}
@@ -320,6 +349,27 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
             "kv_cache_usage_pct": kv,
             "note": "per_service kommt aus aimon-tap-Requests; ohne Tap bleibt die Liste "
                     "leer und die vLLM-Zähler unter /api/v1/latency liefern die Werte.",
+        },
+        "canary": {
+            "configured": bool(canary_rows),
+            "targets": [
+                {
+                    "key": r["key"],
+                    "label": r["label"],
+                    "ok": None if r["ok"] is None else bool(r["ok"]),
+                    "ttft_ms": r["ttft_ms"],
+                    "total_ms": r["total_ms"],
+                    "last_check": r["ts"],
+                    "attempts_1h": canary_hist.get(r["key"], (0, 0))[0],
+                    "failed_1h": canary_hist.get(r["key"], (0, 0))[1],
+                    "target_url": (r["labels"] or {}).get("ziel"),
+                    "model": (r["labels"] or {}).get("modell"),
+                }
+                for r in canary_rows
+            ],
+            "note": "Echter Chat-Request durch denselben Weg wie ein Benutzer. "
+                    "Ohne AIMON_CANARY_TARGETS nicht eingerichtet - und dann sagt "
+                    "nichts im Dashboard, ob der Stack benutzbar ist.",
         },
         "openterminal": pack(ot),
         "privacy": {

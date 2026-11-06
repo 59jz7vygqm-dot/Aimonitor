@@ -7,6 +7,27 @@ sofern eingerichtet — eine Benachrichtigung aus.
 Was hier nicht steht, wird nicht erkannt. Das ist Absicht: eine Regel, die
 raten müsste, gibt es lieber nicht.
 
+## Funktioniert der Stack überhaupt?
+
+Eine Regel, die als einzige nicht eine Eigenschaft misst, sondern die Funktion.
+Nur aktiv, wenn ein Kanarienvogel konfiguriert ist (`AIMON_CANARY_TARGETS`).
+
+| Regel | Schlägt an, wenn | Schwelle |
+|---|---|---|
+| `canary.failing` | ein echter Chat-Request keine Antwort bekommt | — |
+| `canary.flaky` | der letzte Versuch klappte, andere in der Stunde nicht | ab 4 Versuchen |
+| `canary.slow` | die Antwort kommt, aber spät | `AIMON_CANARY_TTFT_WARN_MS` 5000 |
+
+Der Unterschied zu `probe.failing` ist der Punkt: ein Port kann offen sein,
+während kein Modell geladen ist. Ein vLLM kann saubere Metriken liefern,
+während der Proxy davor auf den falschen Upstream zeigt. Beides sieht im
+Dashboard gut aus, und beides fällt erst auf, wenn man es benutzt — oder wenn
+der Kanarienvogel es tut.
+
+`canary.flaky` ist bewusst von `canary.failing` getrennt: ein Dienst, der jede
+dritte Anfrage verliert, sieht ohne diese Unterscheidung genauso gesund aus
+wie einer, der läuft.
+
 ## Knoten und Host
 
 | Regel | Schlägt an, wenn | Schwelle |
@@ -77,8 +98,6 @@ geblockten Anfragen sind 33 % und bedeuten nichts.
 
 Ehrlichkeitshalber, Stand heute:
 
-- **Kein funktionaler Ende-zu-Ende-Check.** `probe.failing` sagt „Port offen",
-  nicht „eine Antwort kommt zurück".
 - **Kein Trend.** „Platte zu 88 % voll" wird gemeldet, „Platte in zwei Tagen
   voll" nicht.
 - **Kein verschwundener Dienst.** Stirbt ein einzelner Dienst, während der

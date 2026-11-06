@@ -151,6 +151,22 @@ Abgeleitet vom Server:
 `privacy.block_rate_pct`, `privacy.upstream_latency_avg_ms`,
 `privacy.query_len_avg_chars`.
 
+## `canary.*` — Ende-zu-Ende-Check (Label `service`)
+
+Vom Server selbst erzeugt, nicht von einem Agent. Ein echter Chat-Request über
+denselben Weg, den ein Benutzer nimmt.
+
+| Metrik | Bedeutung |
+|---|---|
+| `canary.ok` | 1 = eine Antwort mit Text kam zurück, 0 = nicht |
+| `canary.ttft_ms` | bis zum ersten Token **mit Inhalt**, nicht bis zum ersten Byte |
+| `canary.total_ms` | bis der Stream zu Ende war |
+| `canary.completion_tokens` | aus `usage`, falls das Backend es mitschickt |
+
+`canary.ttft_ms` fehlt, wenn der Versuch fehlgeschlagen ist — dort steht dann
+kein `0`, sondern gar nichts. Eine 0 würde in jedem Durchschnitt mitgerechnet
+und die Zahl schönen.
+
 ## `probe.*`
 
 `probe.up` (0/1), `probe.latency_ms`, `probe.http_status` —

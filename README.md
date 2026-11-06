@@ -239,6 +239,52 @@ direkt vom Server abrufbar: `GET /api/v1/contract`.
 
 ---
 
+## Funktioniert der Stack gerade? (Kanarienvogel)
+
+Jede andere Zahl im Dashboard misst eine Eigenschaft: Temperatur, belegter
+Speicher, offener Port. Keine davon beantwortet die Frage, auf die es ankommt
+— bekommt ein Benutzer gerade eine Antwort?
+
+Ein Port ist offen, während kein Modell geladen ist. Ein vLLM liefert saubere
+Metriken, während der Proxy davor auf den falschen Upstream zeigt. Beides
+sieht im Dashboard gut aus.
+
+Der Kanarienvogel schickt deshalb in festem Takt einen echten, winzigen
+Chat-Request durch denselben Weg, den ein Benutzer nimmt, und misst, was
+zurückkommt. Keine Health-Route, keine Sonderbehandlung.
+
+In `deploy/.env`:
+
+```bash
+AIMON_CANARY_TARGETS='[
+  {"name":"litellm","url":"http://skynet01:4000/v1/chat/completions",
+   "model":"qwen3-32b","api_key":"sk-..."},
+  {"name":"ollama","url":"http://vm2001:11434/v1/chat/completions",
+   "model":"gemma3:4b-it-qat"}
+]'
+AIMON_CANARY_INTERVAL_S=300
+```
+
+Pro Ziel optional: `prompt`, `max_tokens`, `timeout_s`. Ohne
+`AIMON_CANARY_TARGETS` passiert nichts.
+
+Daraus entstehen drei Meldungen, die verschiedene Dinge bedeuten:
+
+| Meldung | Heißt |
+|---|---|
+| `canary.failing` | gerade kommt keine Antwort |
+| `canary.flaky` | der letzte Versuch ging, andere in der Stunde nicht |
+| `canary.slow` | die Antwort kommt, aber spät |
+
+Ein Tippfehler in der JSON-Liste schaltet nur den Kanarienvogel ab, nicht den
+Server: die Zeile landet im Log, der Rest läuft weiter.
+
+Was der Check **nicht** kann: er sagt nichts über Last. Gemessen wird eine
+winzige Anfrage auf einem ansonsten vielleicht leeren System. Unter echter
+Last ist die Zeit bis zum ersten Token eher höher, nicht niedriger.
+
+---
+
 ## Benachrichtigungen
 
 Standardmäßig aus. Eingeschaltet meldet sich aimonitor **nur** bei Incidents ab

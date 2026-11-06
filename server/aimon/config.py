@@ -162,6 +162,28 @@ class Settings:
         default_factory=lambda: _i("AIMON_BLOCK_RATE_MIN_REQUESTS", 50)
     )
 
+    # ---------------------------------------------------------- Kanarienvogel
+    # Echte Mini-Requests durch den Weg, den ein Benutzer nimmt. Ohne Ziele
+    # passiert nichts. Format: JSON-Liste aus
+    # {"name":..., "url":..., "model":..., "api_key":..., "prompt":...}
+    canary_targets: str | None = field(
+        default_factory=lambda: os.getenv("AIMON_CANARY_TARGETS")
+    )
+    canary_interval_s: int = field(
+        default_factory=lambda: _i("AIMON_CANARY_INTERVAL_S", 300)
+    )
+    canary_timeout_s: float = field(
+        default_factory=lambda: _f("AIMON_CANARY_TIMEOUT_S", 30.0)
+    )
+    # Unter welchem Knoten die Ergebnisse auftauchen. Der Kanarienvogel laeuft
+    # im Server, nicht auf einer der ueberwachten Maschinen.
+    canary_node: str = field(
+        default_factory=lambda: os.getenv("AIMON_CANARY_NODE", "aimon-server")
+    )
+    canary_ttft_warn_ms: float = field(
+        default_factory=lambda: _f("AIMON_CANARY_TTFT_WARN_MS", 5000.0)
+    )
+
     # ------------------------------------------------------------ Alerting
     #
     # Default aus. Eingeschaltet wird nur bei kritischen Incidents benachrichtigt,

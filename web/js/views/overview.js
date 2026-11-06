@@ -131,11 +131,49 @@ function statusBanner(open, ov) {
 
 /* ------------------------------------------------------------------- Tiles */
 
+/* Die Kachel, die „funktioniert es" beantwortet.
+
+   Drei Zustaende, und "nicht eingerichtet" ist einer davon: eine Kachel, die
+   bei fehlendem Check "ok" zeigt, wäre schlimmer als keine. */
+function canaryTile(c) {
+    const targets = c?.targets || [];
+    if (!targets.length) {
+        return tile('Stack benutzbar', '—',
+            'kein Ende-zu-Ende-Check eingerichtet', 'muted');
+    }
+    const kaputt = targets.filter((x) => x.ok === false);
+    const unbekannt = targets.filter((x) => x.ok == null);
+    const wackelig = targets.filter((x) => x.ok && x.failed_1h > 0);
+
+    if (kaputt.length) {
+        return tile('Stack benutzbar',
+            `nein<span class="unit"> (${kaputt.length}/${targets.length})</span>`,
+            `keine Antwort von: ${kaputt.map((x) => x.label).join(', ')}`, 'bad');
+    }
+    if (unbekannt.length === targets.length) {
+        return tile('Stack benutzbar', '—', 'noch kein Ergebnis', 'muted');
+    }
+    const ttft = targets
+        .map((x) => x.ttft_ms)
+        .filter((v) => v != null);
+    const note = wackelig.length
+        ? `${wackelig.reduce((a, x) => a + x.failed_1h, 0)} Fehlversuche in der letzten Stunde`
+        : (ttft.length
+            ? `${fmtNum(Math.max(...ttft), 0)} ms bis zum ersten Token`
+            : 'Antwort kam zurück');
+    return tile('Stack benutzbar', 'ja', note, wackelig.length ? 'warn' : 'good');
+}
+
 function summaryTiles(ov, open) {
     const t = h('<div class="grid tiles"></div>');
     const g = ov.gpu_summary || {};
     const nodes = ov.nodes || {};
     const gpus = ov.gpus || [];
+
+    // Ganz vorne, weil es die einzige Kachel ist, die etwas über die
+    // Funktion sagt statt über eine Eigenschaft. Ein offener Port und eine
+    // kühle GPU bedeuten nicht, dass eine Antwort zurückkommt.
+    t.appendChild(canaryTile(ov.canary));
 
     t.appendChild(tile('Maschinen online',
         `${nodes.online ?? 0}<span class="unit"> / ${nodes.total ?? 0}</span>`,

@@ -123,7 +123,7 @@ nimm als `node.name` den Host, auf dem er läuft, und trag den Dienst unter `ser
 | Feld | Typ | Pflicht | Bedeutung |
 |---|---|---|---|
 | `key` | string | ja | Stabiler Schlüssel, Konvention `<kind>@<host>:<port>` |
-| `kind` | enum | ja | `vllm`, `ollama`, `comfyui`, `openwebui`, `searxng`, `privacy_proxy`, `openterminal_proxy`, `openterminal_instance`, `tap`, `other` |
+| `kind` | enum | ja | `vllm`, `ollama`, `comfyui`, `openwebui`, `searxng`, `privacy_proxy`, `openterminal_proxy`, `openterminal_instance`, `tap`, `canary`, `other` |
 | `name` | string | nein | Anzeigename |
 | `base_url` | string | nein | Für Deep-Links in der UI |
 | `version` | string | nein | |

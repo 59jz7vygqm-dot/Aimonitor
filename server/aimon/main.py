@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import canary, db
 from .config import settings
 from .diagnostics import rules
 from .routers import diagnostics, ingest, inventory, overview, query, topology
@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
         (rollup.rollup_loop(), "rollup"),
         (rollup.retention_loop(), "retention"),
         (rules.rules_loop(), "rules"),
+        (canary.run_forever(), "canary"),
     ):
         tasks.append(asyncio.create_task(coro, name=name))
     log.info("aimon-server %s gestartet", settings.version)
