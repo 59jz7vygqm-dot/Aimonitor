@@ -99,8 +99,10 @@ async function boot() {
     try { health = await api.health(); } catch { /* unten gemeldet */ }
 
     const bar = h(`<header class="topbar">
-        <div class="brand">aimonitor<span class="ver">${
-            health ? health.version : '?'}</span></div>
+        <div class="brand">aimonitor<span class="ver"
+            title="${health ? `Build ${health.build || 'unbekannt'}` : ''}">${
+    health ? health.version : '?'}${health?.build && health.build !== 'unbekannt'
+    ? ` · ${health.build}` : ''}</span></div>
         <nav class="tabs" aria-label="Bereiche">
           ${VIEWS.map(([id, label]) =>
               `<button type="button" data-view="${id}">${label}</button>`).join('')}

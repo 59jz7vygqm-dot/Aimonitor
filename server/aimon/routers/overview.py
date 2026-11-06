@@ -289,6 +289,7 @@ async def overview(p: Principal = Depends(require_read)) -> dict:
     return {
         "generated_at": now,
         "server_version": settings.version,
+        "server_build": settings.build,
         "nodes": {
             "total": len(node_rows),
             "online": len(node_rows) - len(stale),
@@ -380,6 +381,7 @@ async def self_stats(p: Principal = Depends(require_read)) -> dict:
 
     return {
         "version": settings.version,
+        "build": settings.build,
         "timescale": has_timescale(),
         "counts": dict(counts) if counts else {},
         "samples_estimate": (int(sample_est) if sample_est is not None else None),

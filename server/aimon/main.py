@@ -78,7 +78,8 @@ async def health() -> JSONResponse:
     h = await db.health()
     ok = h["db"] == "ok"
     return JSONResponse(
-        {"status": "ok" if ok else "degraded", "version": settings.version, **h},
+        {"status": "ok" if ok else "degraded", "version": settings.version,
+         "build": settings.build, **h},
         status_code=200 if ok else 503,
     )
 

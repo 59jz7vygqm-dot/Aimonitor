@@ -56,6 +56,10 @@ def _database_url() -> str:
 @dataclass
 class Settings:
     version: str = "0.1.0"
+    # Commit, aus dem dieses Image gebaut wurde. Wird beim Build gesetzt.
+    build: str = field(
+        default_factory=lambda: os.getenv("AIMON_BUILD") or "unbekannt"
+    )
 
     database_url: str = field(default_factory=lambda: _database_url())
     db_pool_min: int = field(default_factory=lambda: _i("AIMON_DB_POOL_MIN", 2))

@@ -299,25 +299,48 @@ Häufigste Ursachen:
 | `Address already in use` | Port 8420 ist belegt, `AIMON_PORT` ändern |
 | Container `Restarting` | Startfehler, siehe Logzeilen darüber |
 
-**Läuft im Container überhaupt der Code, den du erwartest?** Die erste
-Logzeile des Servers nennt Version und Datenbank-Adresse (ohne Passwort):
+### Läuft überhaupt der Code, den du erwartest?
+
+Das ist die häufigste Ursache für „meine Änderung ist nicht da". Ein Befehl
+beantwortet es:
+
+```bash
+cd /opt/Aimonitor && make version
+```
 
 ```
-aimon-server 0.1.0, Datenbank postgresql://aimon:***@db:5432/aimon
+Arbeitsverzeichnis: 0.1.0+beac260
+Server:             0.1.0+0044d98      ← läuft ein alter Container
 ```
 
-Fehlt diese Zeile und der Fehler sieht aus wie vorher, ist das Image alt. Das
-passiert vor allem, wenn `git pull` nicht durchlief — etwa weil Git das
-Verzeichnis einem anderen Benutzer zuordnet:
+Dieselbe Kennung steht oben links im Dashboard neben der Version und in der
+ersten Logzeile des Servers. Stimmen die beiden nicht überein:
+
+```bash
+git pull && make up
+```
+
+`make up` baut mit der Commit-Kennung, erzwingt das Neuerstellen des
+Containers und zeigt danach den Vergleich noch einmal.
+
+Steht beim Server `unbekannt`, wurde mit `docker compose up --build` statt
+`make up` gebaut — dann kennt das Image seinen Stand nicht.
+
+Geht `git pull` nicht durch, ordnet Git das Verzeichnis meist einem anderen
+Benutzer zu:
 
 ```bash
 git config --global --add safe.directory /opt/Aimonitor
-git -C /opt/Aimonitor pull
-git -C /opt/Aimonitor log --oneline -1      # sollte den erwarteten Commit zeigen
-cd /opt/Aimonitor/deploy && sudo docker compose up -d --build --force-recreate
 ```
 
-Zeigt der Build überall `CACHED`, hat sich am Quelltext nichts geändert.
+Zeigt der Build überall `CACHED`, hat sich am Quelltext nichts geändert — dann
+ist der `git pull` das Problem, nicht Docker.
+
+Auch die Agents tragen die Kennung:
+
+```bash
+aimon-agent version      # 0.1.0+beac260
+```
 
 Hat Compose beim Hochfahren nur „Running" statt „Recreated"/„Started" gemeldet,
 läuft noch der alte Container — dann neu erzeugen:

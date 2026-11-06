@@ -10,6 +10,12 @@ WORKDIR /app
 COPY server/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+# Welcher Commit steckt in diesem Image. Ohne das ist von außen nicht zu
+# erkennen, ob ein laufender Container den erwarteten Stand hat - und man
+# sucht Fehler in Code, der gar nicht läuft.
+ARG AIMON_BUILD=unbekannt
+ENV AIMON_BUILD=$AIMON_BUILD
+
 COPY server/aimon /app/aimon
 COPY server/migrations /app/migrations
 COPY web /web

@@ -49,6 +49,11 @@ services:
     build:
       context: ..
       dockerfile: server/Dockerfile
+      args:
+        # `make up` füllt das aus git. Bei einem direkten
+        # `docker compose up --build` bleibt es "unbekannt" - dann sagt das
+        # Dashboard wenigstens, dass es den Stand nicht kennt.
+        AIMON_BUILD: ${AIMON_BUILD:-unbekannt}
     image: aimonitor/server:${AIMON_VERSION:-0.1.0}
     # Dieses Image gibt es in keiner Registry - es wird hier gebaut.
     # Ohne pull_policy versucht `docker compose up -d` erst zu ziehen und
@@ -100,6 +105,7 @@ services:
       AIMON_ALERT_MAIL_TO: ${AIMON_ALERT_MAIL_TO:-}
       AIMON_PUBLIC_URL: ${AIMON_PUBLIC_URL:-}
       AIMON_POWER_CAP_IDLE_UTIL_PCT: ${AIMON_POWER_CAP_IDLE_UTIL_PCT:-30}
+      AIMON_BUILD: ${AIMON_BUILD:-unbekannt}
       TZ: ${TZ:-Europe/Berlin}
     ports:
       - "${AIMON_BIND:-0.0.0.0}:${AIMON_PORT:-8420}:8420"

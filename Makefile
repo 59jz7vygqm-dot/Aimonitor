@@ -1,7 +1,10 @@
 # aimonitor
 SHELL := /bin/bash
 VERSION ?= 0.1.0
-GOFLAGS := -trimpath -ldflags "-s -w -X main.version=$(VERSION)"
+# Commit-Kennung, damit man einem laufenden Agent oder Server ansieht, welcher
+# Stand darin steckt. "-dirty" heißt: nicht committete Änderungen.
+BUILD  ?= $(shell git describe --always --dirty --tags 2>/dev/null || echo unbekannt)
+GOFLAGS := -trimpath -ldflags "-s -w -X main.version=$(VERSION)+$(BUILD)"
 
 .PHONY: help
 help:
@@ -22,6 +25,7 @@ help:
 	@echo "  make fake-stack     Fake-vLLM/Ollama/ComfyUI auf localhost"
 	@echo "  make token NAME=x   Ingest-Token anlegen"
 	@echo "  make clean          Build-Verzeichnis web/dist leeren"
+	@echo "  make version        Welcher Stand liegt hier, welcher läuft"
 
 # ------------------------------------------------------------------- Agent
 .PHONY: agent
@@ -38,9 +42,10 @@ agent-docker:
 		-w /src -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false \
 		-e GOCACHE=/tmp/gocache -e GOPATH=/tmp/gopath \
 		golang:1.22-alpine sh -c '\
-		  go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
+		  go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)+$(BUILD)" \
 		    -o /out/aimon-agent-linux-amd64 . && \
-		  GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
+		  GOARCH=arm64 go build -trimpath \
+		    -ldflags "-s -w -X main.version=$(VERSION)+$(BUILD)" \
 		    -o /out/aimon-agent-linux-arm64 .'
 	cp deploy/agent/install.sh web/dist/install.sh
 	@cd web/dist && sha256sum aimon-agent-linux-* install.sh > SHA256SUMS
@@ -85,7 +90,23 @@ test-py:
 # ------------------------------------------------------------------ Betrieb
 .PHONY: up
 up:
-	cd deploy && docker compose up -d --build
+	cd deploy && AIMON_BUILD=$(BUILD) docker compose up -d --build --force-recreate
+	@echo ""
+	@$(MAKE) --no-print-directory version
+
+# Vergleicht den Stand im Arbeitsverzeichnis mit dem, was tatsächlich läuft.
+# Gedacht für die Frage "warum sehe ich meine Änderung nicht".
+.PHONY: version
+version:
+	@echo "Arbeitsverzeichnis: $(VERSION)+$(BUILD)"
+	@printf 'Server:             '
+	@curl -fsS --max-time 5 "$${AIMON_URL:-http://localhost:8420}/api/v1/health" \
+		2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); \
+print(d.get("version","?") + "+" + d.get("build","?"))' \
+		|| echo "nicht erreichbar"
+	@echo ""
+	@echo "Stimmen die beiden nicht überein, läuft ein alter Container:"
+	@echo "  git pull && make up"
 
 .PHONY: down
 down:

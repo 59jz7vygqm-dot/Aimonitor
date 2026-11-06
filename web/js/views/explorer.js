@@ -29,7 +29,8 @@ export async function render(root, state) {
     if (srv) {
         const c = srv.counts || {};
         root.appendChild(card('aimonitor selbst',
-            `Version ${srv.version}, ${srv.timescale
+            `Version ${srv.version}${srv.build && srv.build !== 'unbekannt'
+                ? `, Build ${srv.build}` : ', Build unbekannt'}, ${srv.timescale
                 ? 'TimescaleDB aktiv' : 'normales PostgreSQL (kein Timescale)'}.`,
             table([
                 { label: 'Kennzahl', key: 'k' },

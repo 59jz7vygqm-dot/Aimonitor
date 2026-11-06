@@ -143,7 +143,8 @@ async def migrate() -> None:
     # Beim Start protokollieren, womit tatsächlich verbunden wird. Ohne das
     # ist bei einem Startfehler nicht erkennbar, ob überhaupt die erwartete
     # Konfiguration im Container liegt.
-    log.info("aimon-server %s, Datenbank %s", settings.version, masked_dsn())
+    log.info("aimon-server %s (Build %s), Datenbank %s",
+             settings.version, settings.build, masked_dsn())
     await wait_for_db()
     p = await init_pool()
     core = (MIGRATIONS / "001_core.sql").read_text()
