@@ -97,15 +97,38 @@ async def contract() -> JSONResponse:
     return JSONResponse({"version": "v1", "markdown": p.read_text()})
 
 
+class FreshStatic(StaticFiles):
+    """Statische Dateien, die der Browser immer nachfragt.
+
+    Ohne Cache-Header darf ein Browser selbst raten, wie lange eine Datei
+    gueltig bleibt - und tut das auch. Nach einem Update sieht man dann
+    stundenlang die alte UI und sucht den Fehler im Server. Das ist hier
+    dreimal passiert, deshalb: "no-cache". Das heisst nicht "jedes Mal neu
+    laden", sondern "jedes Mal nachfragen" - unveraendert antwortet der
+    Server mit 304 und schickt keine Daten. Im LAN kostet das nichts.
+    """
+
+    def file_response(self, *args, **kwargs):  # type: ignore[override]
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 if WEB_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+    app.mount("/static", FreshStatic(directory=str(WEB_DIR)), name="static")
 
     @app.get("/")
     async def index() -> FileResponse:
-        return FileResponse(str(WEB_DIR / "index.html"))
+        return FileResponse(
+            str(WEB_DIR / "index.html"),
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @app.get("/favicon.svg")
     async def favicon() -> FileResponse:
-        return FileResponse(str(WEB_DIR / "favicon.svg"))
+        return FileResponse(
+            str(WEB_DIR / "favicon.svg"),
+            headers={"Cache-Control": "no-cache"},
+        )
 else:  # pragma: no cover
     log.warning("Kein web/-Verzeichnis gefunden (%s) – UI nicht verfügbar", WEB_DIR)

@@ -326,6 +326,13 @@ Containers und zeigt danach den Vergleich noch einmal.
 Steht beim Server `unbekannt`, wurde mit `docker compose up --build` statt
 `make up` gebaut — dann kennt das Image seinen Stand nicht.
 
+Stimmt die Kennung, sieht das Dashboard aber trotzdem alt aus, war früher der
+Browser-Cache die Ursache. Der Server schickt die UI inzwischen mit
+`Cache-Control: no-cache` — der Browser fragt bei jedem Laden nach und bekommt
+`304`, wenn sich nichts geändert hat. Ein hartes Neuladen ist nicht mehr
+nötig. Zur Kontrolle: oben links neben der Version steht die Kennung des
+Stands, aus dem die UI geladen wurde.
+
 Geht `git pull` nicht durch, ordnet Git das Verzeichnis meist einem anderen
 Benutzer zu:
 
