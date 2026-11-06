@@ -61,7 +61,9 @@ Vielfaches des tatsächlich vorhandenen Speichers.
 
 `host.cpu_pct`, `host.cpu_pct_per_core` (Label `core`), `host.load1`, `host.load5`,
 `host.load15`, `host.mem_used_bytes`, `host.mem_total_bytes`, `host.mem_available_bytes`,
-`host.swap_used_bytes`, `host.disk_used_bytes` + `host.disk_total_bytes` (Label `mount`),
+`host.swap_used_bytes` + `host.swap_total_bytes`,
+`host.disk_used_bytes` + `host.disk_total_bytes` + `host.disk_free_bytes`
+(Label `mount`), `host.inodes_used_pct` (Label `mount`),
 `host.disk_read_bps` / `host.disk_write_bps` (Label `dev`),
 `host.net_rx_bps` / `host.net_tx_bps` (Label `iface`),
 `host.uptime_s`, `host.cpu_temp_c` (Label `sensor`), `host.procs_running`,

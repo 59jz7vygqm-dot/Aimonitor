@@ -249,6 +249,178 @@ async def _rule_disk(conn) -> list[Finding]:
     return out
 
 
+async def _shared_memory_nodes(conn) -> set[str]:
+    """Knoten, deren GPU sich den Speicher mit dem Host teilt.
+
+    Dort ist der Arbeitsspeicher zugleich der VRAM: was der Host belegt,
+    fehlt dem Modell. Das aendert, ab wann eine Zahl schlecht ist.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT n.name AS node
+        FROM series s JOIN nodes n ON n.id = s.node_id
+        WHERE s.metric = 'gpu.mem_total_bytes'
+          AND s.labels->>'memory' IN ('host', 'unified')
+        """
+    )
+    return {r["node"] for r in rows}
+
+
+async def _rule_memory(conn) -> list[Finding]:
+    """Arbeitsspeicher und Swap.
+
+    Gemessen wird gegen MemAvailable, nicht gegen MemFree: Linux benutzt
+    freien Speicher als Cache, "frei" ist dort fast immer wenig und sagt
+    nichts. MemAvailable ist das, was ein neuer Prozess bekommen kann.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT n.name AS node, s.metric, l.value
+        FROM series s JOIN series_last l ON l.series_id = s.id
+        JOIN nodes n ON n.id = s.node_id
+        WHERE s.metric IN ('host.mem_total_bytes', 'host.mem_available_bytes',
+                           'host.swap_total_bytes', 'host.swap_used_bytes')
+          AND l.ts > now() - INTERVAL '10 minutes'
+        """
+    )
+    shared = await _shared_memory_nodes(conn)
+
+    per: dict[str, dict[str, float]] = {}
+    for r in rows:
+        per.setdefault(r["node"], {})[r["metric"]] = r["value"]
+
+    out: list[Finding] = []
+    for node, m in per.items():
+        total = m.get("host.mem_total_bytes")
+        avail = m.get("host.mem_available_bytes")
+        if total and avail is not None:
+            pct = (total - avail) / total * 100.0
+            is_shared = node in shared
+            warn = settings.mem_warn_pct_shared if is_shared else settings.mem_warn_pct
+            sev = _sev(pct, warn, settings.mem_crit_pct)
+            if sev:
+                ctx = {
+                    "used_pct": round(pct, 1),
+                    "available_bytes": int(avail),
+                    "total_bytes": int(total),
+                    "warn_pct": warn,
+                    "gemessen_an": "MemAvailable aus /proc/meminfo - nicht MemFree, "
+                                   "weil Linux freien Speicher als Cache benutzt.",
+                }
+                if is_shared:
+                    ctx["geteilter_speicher"] = (
+                        "CPU und GPU teilen sich auf dieser Maschine denselben "
+                        "physischen Speicher. Was hier belegt ist, steht dem Modell "
+                        "nicht zur Verfuegung. Wird es eng, wird nichts langsamer - "
+                        "der OOM-Killer beendet den groessten Prozess, und das ist "
+                        "das Modell."
+                    )
+                out.append(
+                    Finding(
+                        "host.mem_high", sev, "node", node,
+                        f"Arbeitsspeicher auf {node} zu {pct:.0f} % belegt"
+                        + (" (zugleich der VRAM)" if is_shared else ""),
+                        ctx,
+                    )
+                )
+
+        st = m.get("host.swap_total_bytes")
+        su = m.get("host.swap_used_bytes")
+        if st and su is not None:
+            spct = su / st * 100.0
+            if spct >= settings.swap_warn_pct:
+                out.append(
+                    Finding(
+                        "host.swap_used", "warning", "node", node,
+                        f"{node} swappt ({spct:.0f} % der Auslagerungsdatei belegt)",
+                        {
+                            "swap_used_pct": round(spct, 1),
+                            "swap_used_bytes": int(su),
+                            "swap_total_bytes": int(st),
+                            "bedeutung": "Der Arbeitsspeicher war irgendwann knapp. "
+                                         "Ausgelagertes bleibt auch dann liegen, wenn "
+                                         "wieder RAM frei ist - der Wert allein sagt "
+                                         "nicht, ob es gerade eng ist.",
+                            "folge": "Faellt ein Teil der Modellgewichte auf die Platte, "
+                                     "bricht der Durchsatz um Groessenordnungen ein.",
+                        },
+                    )
+                )
+    return out
+
+
+async def _rule_inodes(conn) -> list[Finding]:
+    """Inodes.
+
+    Eine Platte kann voll sein, obwohl Platz frei ist: viele kleine Dateien
+    verbrauchen Inodes. ComfyUI-Outputs und Modell-Caches sind die ueblichen
+    Kandidaten. Der Fehler heisst dann "No space left on device" bei 40 %
+    Belegung - danach sucht man lange.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT n.name AS node, s.labels->>'mount' AS mount, l.value
+        FROM series s JOIN series_last l ON l.series_id = s.id
+        JOIN nodes n ON n.id = s.node_id
+        WHERE s.metric = 'host.inodes_used_pct'
+          AND l.ts > now() - INTERVAL '10 minutes'
+        """
+    )
+    out = []
+    for r in rows:
+        pct = r["value"]
+        sev = _sev(pct, settings.inodes_warn_pct, 95.0)
+        if sev:
+            out.append(
+                Finding(
+                    "host.inodes_full", sev, "node",
+                    f"{r['node']}:{r['mount']}",
+                    f"Inodes auf {r['node']}:{r['mount']} zu {pct:.0f} % belegt",
+                    {
+                        "used_pct": round(pct, 1),
+                        "mount": r["mount"],
+                        "bedeutung": "Nicht der Platz geht aus, sondern die Anzahl "
+                                     "moeglicher Dateien. Schreiben scheitert mit "
+                                     "'No space left on device', obwohl df Platz zeigt.",
+                        "suche": f"sudo du --inodes -xd3 {r['mount']} | sort -rn | head",
+                    },
+                )
+            )
+    return out
+
+
+async def _rule_cpu_temp(conn) -> list[Finding]:
+    rows = await conn.fetch(
+        """
+        SELECT n.name AS node, max(l.value) AS temp
+        FROM series s JOIN series_last l ON l.series_id = s.id
+        JOIN nodes n ON n.id = s.node_id
+        WHERE s.metric = 'host.cpu_temp_c'
+          AND l.ts > now() - INTERVAL '10 minutes'
+        GROUP BY n.name
+        """
+    )
+    out = []
+    for r in rows:
+        sev = _sev(r["temp"], settings.cpu_temp_warn_c, settings.cpu_temp_crit_c)
+        if sev:
+            out.append(
+                Finding(
+                    "host.cpu_hot", sev, "node", r["node"],
+                    f"CPU auf {r['node']} bei {r['temp']:.0f} °C",
+                    {
+                        "temp_c": round(r["temp"], 1),
+                        "warn_c": settings.cpu_temp_warn_c,
+                        "crit_c": settings.cpu_temp_crit_c,
+                        "unsicherheit": "Die zulaessige Temperatur haengt am "
+                                        "CPU-Modell. Die Schwellen hier sind "
+                                        "konservativ geraten, nicht ausgelesen.",
+                    },
+                )
+            )
+    return out
+
+
 async def _rule_llm(conn) -> list[Finding]:
     out: list[Finding] = []
     now = dt.datetime.now(dt.timezone.utc)
@@ -687,6 +859,9 @@ RULES = (
     _rule_nodes_stale,
     _rule_gpu,
     _rule_disk,
+    _rule_memory,
+    _rule_inodes,
+    _rule_cpu_temp,
     _rule_llm,
     _rule_probes,
     _rule_openterminal,

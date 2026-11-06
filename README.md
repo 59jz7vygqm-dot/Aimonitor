@@ -35,6 +35,8 @@ Proxies ─── HTTP POST ───┘          │
 ```
 
 Ausführlich: [`docs/architecture.md`](docs/architecture.md).
+Welche Probleme erkannt werden — und welche nicht:
+[`docs/rules.md`](docs/rules.md).
 
 ---
 
@@ -585,7 +587,8 @@ agent/       Go, statisch, ohne cgo
   internal/shipper/   Push mit Ringpuffer und Backoff
 web/         Vanilla JS, eigener SVG-Chart-Renderer, kein Build-Schritt
 deploy/      docker-compose, systemd-Units, install.sh
-docs/        Architektur, Ingest-Contract, Metrik-Referenz, Integrations-Prompts
+docs/        Architektur, Ingest-Contract, Metrik-Referenz, Regelwerk,
+             Integrations-Prompts
 tools/       Simulator und Fake-Backends zum Testen ohne Hardware
 ```
 

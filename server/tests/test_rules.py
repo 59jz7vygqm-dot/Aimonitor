@@ -370,3 +370,130 @@ async def test_vllm_ohne_metriken_bleibt_ein_hinweis(db):
     assert "--disable-log-stats" in hinweise
     # Die beiden Schalter dürfen nicht verwechselt werden.
     assert "--enable-force-include-usage" in hinweise
+
+
+# ------------------------------------------------------- Host: RAM, Swap, Inodes
+
+async def test_ram_knapp_wird_gemeldet(db):
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "host.mem_total_bytes", "value": 64e9},
+            {"metric": "host.mem_available_bytes", "value": 5e9},  # 92 % belegt
+        ],
+    })
+    f = by_rule(await rules.evaluate())
+    assert f["host.mem_high"][0].severity == "warning"
+
+
+async def test_ram_fast_aufgebraucht_ist_kritisch(db):
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "host.mem_total_bytes", "value": 64e9},
+            {"metric": "host.mem_available_bytes", "value": 1.5e9},  # 97.7 %
+        ],
+    })
+    f = by_rule(await rules.evaluate())
+    assert f["host.mem_high"][0].severity == "critical"
+
+
+async def test_viel_cache_ist_kein_ram_problem(db):
+    """MemFree waere hier winzig, MemAvailable ist es nicht.
+
+    Linux benutzt freien Speicher als Cache. Wer gegen MemFree misst, meldet
+    auf jedem gesunden Server Daueralarm.
+    """
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "host.mem_total_bytes", "value": 64e9},
+            {"metric": "host.mem_available_bytes", "value": 40e9},
+        ],
+    })
+    assert "host.mem_high" not in by_rule(await rules.evaluate())
+
+
+async def test_geteilter_speicher_warnt_frueher(db):
+    """Auf einem GB10 sind 85 % belegter RAM schon ein Problem.
+
+    Dieselbe Zahl auf einer normalen Maschine ist es nicht: dort wird es
+    langsam, hier wird das Modell beendet.
+    """
+    gemeinsam = {
+        "node": {"name": "spark"},
+        "samples": [
+            {"metric": "host.mem_total_bytes", "value": 128e9},
+            {"metric": "host.mem_available_bytes", "value": 18e9},  # 86 % belegt
+            {"metric": "gpu.mem_total_bytes", "value": 128e9,
+             "labels": {"gpu": "0", "memory": "host"}},
+        ],
+    }
+    eigen = {
+        "node": {"name": "normal"},
+        "samples": [
+            {"metric": "host.mem_total_bytes", "value": 128e9},
+            {"metric": "host.mem_available_bytes", "value": 18e9},
+            {"metric": "gpu.mem_total_bytes", "value": 24e9, "labels": {"gpu": "0"}},
+        ],
+    }
+    await write(db, gemeinsam)
+    await write(db, eigen)
+    treffer = {f.subject for f in await rules.evaluate() if f.rule == "host.mem_high"}
+    assert "spark" in treffer
+    assert "normal" not in treffer
+
+
+async def test_swap_wird_gemeldet(db):
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "host.swap_total_bytes", "value": 8e9},
+            {"metric": "host.swap_used_bytes", "value": 4e9},
+        ],
+    })
+    assert "host.swap_used" in by_rule(await rules.evaluate())
+
+
+async def test_leerer_swap_schweigt(db):
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "host.swap_total_bytes", "value": 8e9},
+            {"metric": "host.swap_used_bytes", "value": 0},
+        ],
+    })
+    assert "host.swap_used" not in by_rule(await rules.evaluate())
+
+
+async def test_inodes_voll_bei_freier_platte(db):
+    """Der Fall, den man ohne diese Regel stundenlang sucht."""
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [
+            {"metric": "host.disk_used_bytes", "value": 400e9, "labels": {"mount": "/"}},
+            {"metric": "host.disk_total_bytes", "value": 1e12, "labels": {"mount": "/"}},
+            {"metric": "host.inodes_used_pct", "value": 97, "labels": {"mount": "/"}},
+        ],
+    })
+    f = by_rule(await rules.evaluate())
+    assert "host.disk_full" not in f
+    assert "host.inodes_full" in f
+    assert f["host.inodes_full"][0].severity == "critical"
+
+
+async def test_warme_cpu_schweigt(db):
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [{"metric": "host.cpu_temp_c", "value": 68}],
+    })
+    assert "host.cpu_hot" not in by_rule(await rules.evaluate())
+
+
+async def test_heisse_cpu_wird_gemeldet(db):
+    await write(db, {
+        "node": {"name": "n"},
+        "samples": [{"metric": "host.cpu_temp_c", "value": 98}],
+    })
+    f = by_rule(await rules.evaluate())
+    assert f["host.cpu_hot"][0].severity == "critical"

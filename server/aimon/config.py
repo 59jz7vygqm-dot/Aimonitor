@@ -131,6 +131,31 @@ class Settings:
     headroom_warn_pct: float = field(default_factory=lambda: _f("AIMON_HEADROOM_WARN_PCT", 20.0))
     headroom_crit_pct: float = field(default_factory=lambda: _f("AIMON_HEADROOM_CRIT_PCT", 5.0))
     disk_warn_pct: float = field(default_factory=lambda: _f("AIMON_DISK_WARN_PCT", 88.0))
+    inodes_warn_pct: float = field(
+        default_factory=lambda: _f("AIMON_INODES_WARN_PCT", 85.0)
+    )
+    mem_warn_pct: float = field(default_factory=lambda: _f("AIMON_MEM_WARN_PCT", 90.0))
+    mem_crit_pct: float = field(default_factory=lambda: _f("AIMON_MEM_CRIT_PCT", 96.0))
+    # Auf Maschinen mit gemeinsamem Speicher (GB10, Grace, Jetson) ist der
+    # Arbeitsspeicher zugleich der VRAM. Dort wird es nicht langsam, wenn er
+    # knapp wird - dort beendet der OOM-Killer das Modell. Deshalb frueher.
+    mem_warn_pct_shared: float = field(
+        default_factory=lambda: _f("AIMON_MEM_WARN_PCT_SHARED", 82.0)
+    )
+    # Swap auf einem Inference-Host heisst: der Arbeitsspeicher war knapp.
+    # Auch wenn er wieder frei ist, bleibt Ausgelagertes liegen - der Wert
+    # ist deshalb ein Hinweis, keine akute Meldung.
+    swap_warn_pct: float = field(
+        default_factory=lambda: _f("AIMON_SWAP_WARN_PCT", 25.0)
+    )
+    # CPU-Temperatur: die Grenzen haengen am Modell. Konservativ gesetzt,
+    # damit die Regel nicht staendig anschlaegt.
+    cpu_temp_warn_c: float = field(
+        default_factory=lambda: _f("AIMON_CPU_TEMP_WARN_C", 90.0)
+    )
+    cpu_temp_crit_c: float = field(
+        default_factory=lambda: _f("AIMON_CPU_TEMP_CRIT_C", 97.0)
+    )
     block_rate_warn_pct: float = field(default_factory=lambda: _f("AIMON_BLOCK_RATE_WARN_PCT", 25.0))
     # Unterhalb dieser Zahl von Anfragen ist eine Blockquote keine Aussage.
     block_rate_min_requests: int = field(
